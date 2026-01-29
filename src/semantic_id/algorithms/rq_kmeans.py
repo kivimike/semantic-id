@@ -40,7 +40,8 @@ class RQKMeans(BaseSemanticEncoder):
         max_iter: int = 100,
         tol: float = 1e-4,
         random_state: Optional[int] = None,
-        verbose: bool = False
+        verbose: bool = False,
+        n_init: Optional[int] = None
     ):
         self.n_levels = n_levels
         
@@ -57,6 +58,7 @@ class RQKMeans(BaseSemanticEncoder):
         self.tol = tol
         self.random_state = random_state
         self.verbose = verbose
+        self.n_init = n_init
 
         self.codebooks_: List[np.ndarray] = [] # List of (K_l, D) arrays (Always stored as Numpy on CPU for master state)
         self.D_ = None
@@ -91,7 +93,19 @@ class RQKMeans(BaseSemanticEncoder):
                 print(f"Training level {l+1}/{self.n_levels} (K={n_clusters_l}) on CPU...")
             
             # Determine seed for this level
-            level_seed = self.random_state + l if self.random_state is not None else None
+            # Use seed generation consistent with reference implementation
+            level_seed = None
+            if self.random_state is not None:
+                 level_seed = int(np.random.RandomState(self.random_state + l).randint(0, 2**31 - 1))
+            
+            # Determine n_init
+            if self.n_init is not None:
+                current_n_init = self.n_init
+            else:
+                if self.implementation == "constrained":
+                    current_n_init = 3 # Constrained default
+                else:
+                    current_n_init = 10 # Standard default
             
             if self.implementation == "constrained":
                 # Calculate min and max cluster size for balanced clustering
@@ -105,7 +119,7 @@ class RQKMeans(BaseSemanticEncoder):
                     max_iter=self.max_iter,
                     tol=self.tol,
                     random_state=level_seed,
-                    n_init=10 if self.metric == 'l2' else 1, # k-means-constrained might not support cosine directly efficiently
+                    n_init=current_n_init, # k-means-constrained might not support cosine directly efficiently
                     n_jobs=-1
                 )
             else:
@@ -114,7 +128,7 @@ class RQKMeans(BaseSemanticEncoder):
                     max_iter=self.max_iter,
                     tol=self.tol,
                     random_state=level_seed,
-                    n_init=10,
+                    n_init=current_n_init,
                 )
             
             kmeans.fit(residuals)
@@ -138,7 +152,8 @@ class RQKMeans(BaseSemanticEncoder):
             tol=self.tol,
             random_state=self.random_state,
             verbose=self.verbose,
-            device=device
+            device=device,
+            n_init=self.n_init
         )
         torch_model.fit(X)
         
@@ -196,7 +211,8 @@ class RQKMeans(BaseSemanticEncoder):
             tol=self.tol,
             random_state=self.random_state,
             verbose=self.verbose,
-            device=device
+            device=device,
+            n_init=self.n_init
         )
         # Load codebooks into torch model
         torch_model.codebooks_ = [torch.from_numpy(cb).to(device) for cb in self.codebooks_]
@@ -242,6 +258,7 @@ class RQKMeans(BaseSemanticEncoder):
             "max_iter": self.max_iter,
             "tol": self.tol,
             "random_state": self.random_state,
+            "n_init": self.n_init,
             "D": self.D_
         }
         
@@ -270,7 +287,8 @@ class RQKMeans(BaseSemanticEncoder):
             implementation=metadata.get("implementation", "kmeans"),
             max_iter=metadata["max_iter"],
             tol=metadata["tol"],
-            random_state=metadata["random_state"]
+            random_state=metadata["random_state"],
+            n_init=metadata.get("n_init", None)
         )
         instance.D_ = metadata["D"]
         

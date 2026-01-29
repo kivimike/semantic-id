@@ -28,7 +28,8 @@ class RQKMeansTorch:
         tol: float,
         random_state: Optional[int],
         verbose: bool,
-        device: str
+        device: str,
+        n_init: Optional[int] = None
     ):
         self.n_levels = n_levels
         self.n_clusters = n_clusters
@@ -39,6 +40,7 @@ class RQKMeansTorch:
         self.random_state = random_state
         self.verbose = verbose
         self.device = device
+        self.n_init = n_init
         
         # We store codebooks as a List of torch Tensors on the target device
         self.codebooks_: List[torch.Tensor] = []
@@ -88,6 +90,12 @@ class RQKMeansTorch:
                     if not HAS_CONSTRAINED:
                         raise ImportError("k-means-constrained is required for implementation='constrained'")
                     
+                    # Determine n_init (same logic as RQKMeans)
+                    if self.n_init is not None:
+                         current_n_init = self.n_init
+                    else:
+                         current_n_init = 3 # Constrained default
+                    
                     kmeans = KMeansConstrained(
                         n_clusters=K,
                         size_min=min_size,
@@ -95,7 +103,7 @@ class RQKMeansTorch:
                         max_iter=self.max_iter,
                         tol=self.tol,
                         random_state=seed,
-                        n_init=10 if self.metric == 'l2' else 1,
+                        n_init=current_n_init,
                         n_jobs=-1
                     )
                     kmeans.fit(residuals_cpu)
