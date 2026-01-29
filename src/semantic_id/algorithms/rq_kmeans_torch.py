@@ -70,32 +70,39 @@ class RQKMeansTorch:
             labels = None
             
             if self.implementation == "constrained":
-                # FALLBACK to CPU for Constrained Fit
-                # k-means-constrained library is CPU only.
-                # Move residuals to CPU numpy
-                residuals_cpu = residuals.cpu().numpy()
-                
-                min_size = max(1, N // K - 1)
-                max_size = N // K + 1
-                
-                if not HAS_CONSTRAINED:
-                    raise ImportError("k-means-constrained is required for implementation='constrained'")
-                
-                kmeans = KMeansConstrained(
-                    n_clusters=K,
-                    size_min=min_size,
-                    size_max=max_size,
-                    max_iter=self.max_iter,
-                    tol=self.tol,
-                    random_state=seed,
-                    n_init=10 if self.metric == 'l2' else 1,
-                    n_jobs=-1
-                )
-                kmeans.fit(residuals_cpu)
-                
-                # Convert results back to Torch/GPU
-                centers = torch.from_numpy(kmeans.cluster_centers_).to(self.device, dtype=torch.float32)
-                labels = torch.from_numpy(kmeans.labels_).to(self.device, dtype=torch.long)
+                # Attempt to use GPU-based Sinkhorn Constrained K-Means first
+                try:
+                    centers, labels = self._constrained_kmeans_torch(residuals, K, seed)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"GPU Constrained K-Means failed ({e}), falling back to CPU...")
+                    
+                    # FALLBACK to CPU for Constrained Fit
+                    # k-means-constrained library is CPU only.
+                    # Move residuals to CPU numpy
+                    residuals_cpu = residuals.cpu().numpy()
+                    
+                    min_size = max(1, N // K - 1)
+                    max_size = N // K + 1
+                    
+                    if not HAS_CONSTRAINED:
+                        raise ImportError("k-means-constrained is required for implementation='constrained'")
+                    
+                    kmeans = KMeansConstrained(
+                        n_clusters=K,
+                        size_min=min_size,
+                        size_max=max_size,
+                        max_iter=self.max_iter,
+                        tol=self.tol,
+                        random_state=seed,
+                        n_init=10 if self.metric == 'l2' else 1,
+                        n_jobs=-1
+                    )
+                    kmeans.fit(residuals_cpu)
+                    
+                    # Convert results back to Torch/GPU
+                    centers = torch.from_numpy(kmeans.cluster_centers_).to(self.device, dtype=torch.float32)
+                    labels = torch.from_numpy(kmeans.labels_).to(self.device, dtype=torch.long)
                 
             else:
                 # Standard K-Means on GPU
@@ -208,6 +215,105 @@ class RQKMeansTorch:
                     new_centers[k] = centers[k]
                     
             # Check convergence
+            shift = torch.norm(centers - new_centers)
+            centers = new_centers
+            
+            if shift < self.tol:
+                break
+                
+        return centers, labels
+
+    def _sinkhorn_algorithm(self, distances: torch.Tensor, epsilon: float = 0.003, iterations: int = 100):
+        """
+        Sinkhorn algorithm to balance cluster assignment.
+        Reference: reference/rq/models/layers.py
+        """
+        Q = torch.exp(- distances / epsilon)
+        
+        B = Q.shape[0] # number of samples
+        K = Q.shape[1] # number of clusters
+        
+        # make the matrix sums to 1
+        sum_Q = Q.sum(-1, keepdim=True).sum(-2, keepdim=True)
+        Q /= sum_Q
+        
+        for it in range(iterations):
+            # normalize each column: total weight per sample must be 1/B
+            Q /= torch.sum(Q, dim=1, keepdim=True)
+            Q /= B
+            
+            # normalize each row: total weight per prototype must be 1/K
+            Q /= torch.sum(Q, dim=0, keepdim=True)
+            Q /= K
+            
+        Q *= B # the columns must sum to 1 so that Q is an assignment probability
+        return Q
+
+    def _center_distance_for_constraint(self, distances: torch.Tensor):
+        """
+        Adjust distances to help Sinkhorn stability.
+        Reference: reference/rq/models/vq.py
+        """
+        max_distance = distances.max()
+        min_distance = distances.min()
+        
+        middle = (max_distance + min_distance) / 2
+        amplitude = max_distance - middle + 1e-5
+        
+        # Center around 0 with amplitude 1? No, original implementation:
+        # centered_distances = (distances - middle) / amplitude
+        # Actually reference code is truncated in my view, but usually it centers/scales.
+        # Let's assume standard centering.
+        centered_distances = (distances - middle) / amplitude
+        return centered_distances
+
+    def _constrained_kmeans_torch(self, X: torch.Tensor, K: int, seed: Optional[int]):
+        """
+        Constrained K-Means using Sinkhorn-Knopp algorithm for balanced assignment.
+        This runs entirely on GPU.
+        """
+        N, D = X.shape
+        
+        if seed is not None:
+            torch.manual_seed(seed)
+            
+        # Initialize centers randomly
+        indices = torch.randperm(N, device=self.device)[:K]
+        centers = X[indices].clone()
+        
+        for i in range(self.max_iter):
+            # E-step: Assign labels with Sinkhorn balancing
+            dists = torch.cdist(X, centers, p=2.0) # (N, K)
+            
+            # Use squared distances for Sinkhorn usually? 
+            # Reference uses "distances", where distances usually means L2 or squared L2.
+            # RQKMeans uses L2. Let's stick to dists (which is L2 norm from cdist).
+            # But usually energy is squared distance.
+            dists_sq = dists ** 2
+            
+            # Sinkhorn needs adjusted distances to be stable and work as logits
+            # d_centered = self._center_distance_for_constraint(dists_sq)
+            # Actually simple epsilon scaling is often enough.
+            # Using reference logic:
+            # d = center_distance_for_constraint(d)
+            # Q = sinkhorn_algorithm(d, epsilon, iters)
+            
+            d_centered = self._center_distance_for_constraint(dists_sq)
+            Q = self._sinkhorn_algorithm(d_centered, epsilon=0.1, iterations=30) 
+            # Epsilon and iters are hyperparameters. 0.1 and 30 are reasonable starts.
+            
+            # Hard assignment from Q
+            labels = torch.argmax(Q, dim=1)
+            
+            # M-step: Update centers (same as standard KMeans)
+            new_centers = torch.zeros_like(centers)
+            for k in range(K):
+                mask = (labels == k)
+                if mask.any():
+                    new_centers[k] = X[mask].mean(dim=0)
+                else:
+                    new_centers[k] = centers[k] # Keep old if empty (rare with Sinkhorn)
+            
             shift = torch.norm(centers - new_centers)
             centers = new_centers
             

@@ -22,6 +22,12 @@ To use the **constrained** implementation (balanced clusters), ensure you have `
 pip install k-means-constrained
 ```
 
+To enable **GPU acceleration** (PyTorch backend):
+
+```bash
+pip install torch
+```
+
 ## Usage
 
 ### 1. Basic Usage (RQ-KMeans)
@@ -37,7 +43,7 @@ X = np.random.randn(100, 16)
 # 4 levels, 256 clusters per level
 model = RQKMeans(n_levels=4, n_clusters=256, random_state=42)
 
-# Train
+# Train (CPU by default)
 model.fit(X)
 
 # Encode to integer codes
@@ -49,7 +55,20 @@ sids = model.semantic_id(codes)
 print(sids[0])  # e.g., "12-45-200-5"
 ```
 
-### 2. High-Level Engine with Uniqueness
+### 2. GPU Acceleration (PyTorch)
+
+If you have PyTorch installed and a GPU (CUDA or MPS) available, you can accelerate training and encoding.
+
+```python
+# Automatically uses GPU if available
+device = "cuda" # or "mps" or "cpu"
+
+model = RQKMeans(n_levels=4, n_clusters=256)
+model.fit(X, device=device)
+codes = model.encode(X, device=device)
+```
+
+### 3. High-Level Engine with Uniqueness
 
 Use `SemanticIdEngine` to automatically handle collisions (ensure every ID is unique).
 
@@ -109,7 +128,7 @@ loaded_model = RQKMeans.load("my_rq_model")
 - [x] Basic tests.
 
 ### Future Plans (v1.0+)
-- [ ] **Torch Backend**: Implement `RQKMeans` using PyTorch for GPU acceleration (`torch.cdist`).
+- [x] **Torch Backend**: Implement `RQKMeans` using PyTorch for GPU acceleration (`torch.cdist`).
 - [ ] **RQ-VAE**: Add neural network-based Residual Quantization VAE support.
 - [ ] **Experiment Runner**: CLI tool for sweeping hyperparameters (L, K) and comparing collision rates.
 - [ ] **Advanced Metrics**: Add reconstruction quality metrics (recall@K for retrieval).
