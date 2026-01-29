@@ -69,3 +69,22 @@ def test_constrained_kmeans():
     # We allow a small margin (e.g., +/- 3).
     assert np.all(counts >= 7)
     assert np.all(counts <= 13)
+
+def test_variable_clusters():
+    N, D = 100, 8
+    X = np.random.randn(N, D)
+    
+    # Level 1: 5 clusters, Level 2: 10 clusters
+    n_clusters = [5, 10]
+    model = RQKMeans(n_levels=2, n_clusters=n_clusters, random_state=42)
+    model.fit(X)
+    codes = model.encode(X)
+    
+    assert codes.shape == (N, 2)
+    assert np.all(codes[:, 0] < 5)
+    assert np.all(codes[:, 1] < 10)
+    
+    # Check codebook shapes
+    assert len(model.codebooks_) == 2
+    assert model.codebooks_[0].shape == (5, D)
+    assert model.codebooks_[1].shape == (10, D)

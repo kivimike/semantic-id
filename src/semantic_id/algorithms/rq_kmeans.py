@@ -23,7 +23,7 @@ class RQKMeans(BaseSemanticEncoder):
     def __init__(
         self,
         n_levels: int = 4,
-        n_clusters: int = 256,
+        n_clusters: Union[int, List[int]] = 256,
         metric: Literal["l2", "cosine"] = "l2",
         implementation: Literal["kmeans", "constrained"] = "kmeans",
         max_iter: int = 100,
@@ -32,7 +32,14 @@ class RQKMeans(BaseSemanticEncoder):
         verbose: bool = False
     ):
         self.n_levels = n_levels
-        self.n_clusters = n_clusters
+        
+        if isinstance(n_clusters, int):
+            self.n_clusters = [n_clusters] * n_levels
+        else:
+            if len(n_clusters) != n_levels:
+                raise ValueError(f"len(n_clusters) {len(n_clusters)} must match n_levels {n_levels}")
+            self.n_clusters = list(n_clusters)
+            
         self.metric = metric
         self.implementation = implementation
         self.max_iter = max_iter
@@ -40,7 +47,7 @@ class RQKMeans(BaseSemanticEncoder):
         self.random_state = random_state
         self.verbose = verbose
 
-        self.codebooks_ = None # Shape (L, K, D)
+        self.codebooks_: List[np.ndarray] = [] # List of (K_l, D) arrays
         self.D_ = None
 
         if self.implementation == "constrained" and not HAS_CONSTRAINED:
@@ -55,24 +62,26 @@ class RQKMeans(BaseSemanticEncoder):
         self.D_ = D
         
         # Prepare codebooks storage
-        self.codebooks_ = np.zeros((self.n_levels, self.n_clusters, D), dtype=np.float32)
+        self.codebooks_ = []
         
         residuals = X.copy()
         
         for l in range(self.n_levels):
+            n_clusters_l = self.n_clusters[l]
+            
             if self.verbose:
-                print(f"Training level {l+1}/{self.n_levels}...")
+                print(f"Training level {l+1}/{self.n_levels} (K={n_clusters_l})...")
             
             # Determine seed for this level
             level_seed = self.random_state + l if self.random_state is not None else None
             
             if self.implementation == "constrained":
                 # Calculate min and max cluster size for balanced clustering
-                min_size = max(1, N // self.n_clusters - 1)
-                max_size = N // self.n_clusters + 1
+                min_size = max(1, N // n_clusters_l - 1)
+                max_size = N // n_clusters_l + 1
                 
                 kmeans = KMeansConstrained(
-                    n_clusters=self.n_clusters,
+                    n_clusters=n_clusters_l,
                     size_min=min_size,
                     size_max=max_size,
                     max_iter=self.max_iter,
@@ -83,7 +92,7 @@ class RQKMeans(BaseSemanticEncoder):
                 )
             else:
                 kmeans = KMeans(
-                    n_clusters=self.n_clusters,
+                    n_clusters=n_clusters_l,
                     max_iter=self.max_iter,
                     tol=self.tol,
                     random_state=level_seed,
@@ -106,7 +115,7 @@ class RQKMeans(BaseSemanticEncoder):
             centers = kmeans.cluster_centers_
             labels = kmeans.labels_
             
-            self.codebooks_[l] = centers
+            self.codebooks_.append(centers)
             
             # Update residuals
             # R_{l+1} = R_l - C_l[codes_l]
@@ -115,7 +124,7 @@ class RQKMeans(BaseSemanticEncoder):
         return self
 
     def encode(self, X: ArrayLike, *, device: str = "cpu", batch_size: Optional[int] = None) -> np.ndarray:
-        if self.codebooks_ is None:
+        if not self.codebooks_:
             raise RuntimeError("Model is not fitted yet.")
             
         X = np.asarray(X, dtype=np.float32)
@@ -133,7 +142,7 @@ class RQKMeans(BaseSemanticEncoder):
             residuals = batch_X.copy()
             
             for l in range(self.n_levels):
-                codebook = self.codebooks_[l] # (K, D)
+                codebook = self.codebooks_[l] # (K_l, D)
                 
                 # Find nearest centroid for each residual
                 # We use euclidean distance
@@ -158,7 +167,7 @@ class RQKMeans(BaseSemanticEncoder):
         return result
 
     def decode(self, codes: np.ndarray) -> np.ndarray:
-        if self.codebooks_ is None:
+        if not self.codebooks_:
             raise RuntimeError("Model is not fitted yet.")
             
         N, L = codes.shape
@@ -180,7 +189,7 @@ class RQKMeans(BaseSemanticEncoder):
         metadata = {
             "type": "RQKMeans",
             "n_levels": self.n_levels,
-            "n_clusters": self.n_clusters,
+            "n_clusters": self.n_clusters, # Can be list
             "metric": self.metric,
             "implementation": self.implementation,
             "max_iter": self.max_iter,
@@ -192,9 +201,11 @@ class RQKMeans(BaseSemanticEncoder):
         with open(os.path.join(path, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
             
+        # Save codebooks as separate arrays
+        codebook_dict = {f"codebook_{i}": cb for i, cb in enumerate(self.codebooks_)}
         np.savez_compressed(
-            os.path.join(path, "codebook.npz"),
-            codebooks=self.codebooks_
+            os.path.join(path, "codebooks.npz"),
+            **codebook_dict
         )
         
     @classmethod
@@ -216,7 +227,10 @@ class RQKMeans(BaseSemanticEncoder):
         )
         instance.D_ = metadata["D"]
         
-        data = np.load(os.path.join(path, "codebook.npz"))
-        instance.codebooks_ = data["codebooks"]
+        # Load codebooks
+        data = np.load(os.path.join(path, "codebooks.npz"))
+        instance.codebooks_ = []
+        for i in range(instance.n_levels):
+            instance.codebooks_.append(data[f"codebook_{i}"])
         
         return instance
