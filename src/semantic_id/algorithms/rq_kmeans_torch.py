@@ -168,6 +168,66 @@ class RQKMeansTorch:
         
         return codes
 
+    def _initialize_centroids_kmeans_plus_plus(self, X: torch.Tensor, K: int, seed: Optional[int]) -> torch.Tensor:
+        """
+        Initialize centroids using k-means++ algorithm.
+        This ensures better convergence and alignment with sklearn's default behavior.
+        """
+        N, D = X.shape
+        
+        if seed is not None:
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            
+        # 1. Choose first center randomly
+        # We use a random index from 0 to N-1
+        # Use numpy for initial index to be deterministic with seed if desired, 
+        # or torch if we want everything on device. 
+        # Since we want to align with general behavior, random uniform is fine.
+        
+        # We'll use torch on device for speed
+        first_center_idx = torch.randint(0, N, (1,), device=self.device).item()
+        
+        centers = torch.empty((K, D), device=self.device, dtype=X.dtype)
+        centers[0] = X[first_center_idx]
+        
+        # To store nearest distance squared for each point
+        # Initialize with infinity
+        closest_dist_sq = torch.full((N,), float('inf'), device=self.device)
+        
+        # 2. Loop to find other K-1 centers
+        for i in range(1, K):
+            # Distance from the last added center to all points
+            # We use squared euclidean distance
+            # ||a - b||^2
+            # current_center is (1, D), X is (N, D)
+            # We can use (X - center)^2 . sum(dim=1)
+            current_center = centers[i-1].unsqueeze(0) # (1, D)
+            
+            # Efficient distance computation
+            # dists = torch.sum((X - current_center) ** 2, dim=1) 
+            # OR better: use cdist if D is large, but direct diff is fine here.
+            # actually cdist returns L2, we want squared L2.
+            dist_sq_to_new_center = torch.sum((X - current_center) ** 2, dim=1)
+            
+            # Update closest distance for each point
+            closest_dist_sq = torch.minimum(closest_dist_sq, dist_sq_to_new_center)
+            
+            # 3. Choose new center with probability proportional to D(x)^2
+            # We use torch.multinomial for weighted sampling
+            # probs = closest_dist_sq / closest_dist_sq.sum()
+            # multinomial expects weights, it normalizes internally.
+            
+            # Numerical stability: if sum is 0 (all points on top of centers), pick random
+            if closest_dist_sq.sum() == 0:
+                 candidate_idx = torch.randint(0, N, (1,), device=self.device).item()
+            else:
+                candidate_idx = torch.multinomial(closest_dist_sq, 1).item()
+                
+            centers[i] = X[candidate_idx]
+            
+        return centers
+
     def _kmeans_torch(self, X: torch.Tensor, K: int, seed: Optional[int]):
         """
         Simple K-Means implementation in PyTorch.
@@ -175,14 +235,11 @@ class RQKMeansTorch:
         N, D = X.shape
         
         # 1. Initialize Centers
-        # For simplicity, use K-Means++ initialization or random points
-        # Random points is faster and easier for MVP.
         if seed is not None:
             torch.manual_seed(seed)
         
-        # Random choice of K indices without replacement
-        indices = torch.randperm(N, device=self.device)[:K]
-        centers = X[indices].clone()
+        # Use k-means++ initialization
+        centers = self._initialize_centroids_kmeans_plus_plus(X, K, seed)
         
         prev_centers = None
         

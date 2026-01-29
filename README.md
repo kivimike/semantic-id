@@ -28,6 +28,26 @@ To enable **GPU acceleration** (PyTorch backend):
 pip install torch
 ```
 
+## How It Works: The Pipeline
+
+The generation of a Semantic ID involves a pipeline of three main stages:
+
+1.  **Encoder (Quantization)**:
+    *   **Input**: Continuous vector embedding (e.g., `[0.1, -0.5, ...]`).
+    *   **Process**: The `RQKMeans` algorithm hierarchically assigns the vector to clusters at multiple levels.
+    *   **Output**: A sequence of discrete integers (codes), e.g., `(12, 5, 33)`.
+
+2.  **Semantic Formatting**:
+    *   **Process**: Codes are joined by a separator.
+    *   **Output**: A raw semantic string, e.g., `"12-5-33"`. This represents the *semantic region* of the vector.
+
+3.  **Uniqueness Resolution**:
+    *   **Process**: The `UniqueIdResolver` checks a `CollisionStore` (Redis, SQLite, etc.) to see if this string has been assigned.
+    *   **Logic**:
+        *   First time: Returns `"12-5-33"`.
+        *   Collision: Appends a counter, e.g., `"12-5-33-1"`, `"12-5-33-2"`.
+    *   **Output**: A globally unique identifier.
+
 ## Usage
 
 ### 1. Basic Usage (RQ-KMeans)
@@ -57,7 +77,7 @@ print(sids[0])  # e.g., "12-45-200-5"
 
 ### 2. GPU Acceleration (PyTorch)
 
-If you have PyTorch installed and a GPU (CUDA or MPS) available, you can accelerate training and encoding.
+If you have PyTorch installed and a GPU (CUDA or MPS) available, you can accelerate training and encoding. The PyTorch backend implements `k-means++` initialization, ensuring high-quality centroids similar to the Scikit-Learn backend.
 
 ```python
 # Automatically uses GPU if available
@@ -68,9 +88,11 @@ model.fit(X, device=device)
 codes = model.encode(X, device=device)
 ```
 
+**Note:** `fit()` results may differ slightly between CPU (Scikit-Learn) and GPU (PyTorch) backends due to different random number generators and floating-point precision, even with the same seed. For consistent IDs across environments, see the **Reproducibility** section.
+
 ### 3. High-Level Engine with Uniqueness
 
-Use `SemanticIdEngine` to automatically handle collisions (ensure every ID is unique).
+Use `SemanticIdEngine` to automatically handle collisions (ensure every ID is unique). This is the recommended way to run the full pipeline.
 
 ```python
 from semantic_id.engine import SemanticIdEngine
@@ -95,7 +117,7 @@ unique_ids = engine.unique_ids(X)
 print(unique_ids[0])
 ```
 
-### 3. Balanced Clustering (Constrained K-Means)
+### 4. Balanced Clustering (Constrained K-Means)
 
 Standard K-Means can lead to cluster imbalance (some codes used very often, others rarely). Use `implementation="constrained"` to enforce balanced usage of codes.
 
@@ -108,7 +130,24 @@ model = RQKMeans(
 model.fit(X)
 ```
 
-### 4. Saving and Loading
+### 5. Advanced Configuration & Custom Stores
+
+You can customize the number of clusters per level and implement custom stores (e.g., for Redis or JSON files).
+
+See **[examples/advanced_usage.py](examples/advanced_usage.py)** for a complete script demonstrating:
+*   Defining a custom `JSONCollisionStore`.
+*   Using variable cluster sizes (e.g., `n_clusters=[4, 4, 8]`).
+*   Step-by-step pipeline execution/debugging.
+
+```python
+# Snippet: Variable clusters per level
+model = RQKMeans(
+    n_levels=3, 
+    n_clusters=[10, 20, 50] # Layer 1 has 10 clusters, Layer 2 has 20, etc.
+)
+```
+
+### 6. Saving and Loading
 
 ```python
 # Save model artifacts
@@ -117,6 +156,27 @@ model.save("my_rq_model")
 # Load later
 loaded_model = RQKMeans.load("my_rq_model")
 ```
+
+### 7. Reproducibility & Cross-Device Consistency
+
+To ensure **identical Semantic IDs** across different machines or devices (e.g., training on a powerful GPU server and inferring on a CPU edge device), follow this workflow:
+
+1.  **Train (`fit`) once**: Train your model on your preferred device.
+2.  **Save the model**: Use `model.save()`.
+3.  **Load for Inference**: Use `RQKMeans.load()` on the target device.
+
+```python
+# Machine A (Training)
+model.fit(X_train, device="cuda")
+model.save("production_model")
+
+# Machine B (Inference - even on CPU)
+prod_model = RQKMeans.load("production_model")
+# This will produce the exact same codes as Machine A for the same input
+codes = prod_model.encode(X_test, device="cpu")
+```
+
+Do **not** retrain (`fit`) on the second machine if you need the IDs to be consistent with the first one, as `fit` involves random initialization which varies across backends (Numpy vs PyTorch) and hardware.
 
 ## Roadmap & ToDo
 
