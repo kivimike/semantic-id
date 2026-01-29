@@ -20,6 +20,7 @@ dependencies = [
     "numpy",
     "scikit-learn",
     "k-means-constrained",
+    "torch>=2.0.0",
 ]
 
 [project.optional-dependencies]

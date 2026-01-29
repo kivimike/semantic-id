@@ -3,10 +3,12 @@ import os
 import pickle
 from typing import List, Optional, Union, Dict, Any, Literal
 import numpy as np
+import torch
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import euclidean_distances, cosine_distances
 
 from semantic_id.core import BaseSemanticEncoder, ArrayLike
+from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
 
 try:
     from k_means_constrained import KMeansConstrained
@@ -18,6 +20,15 @@ class RQKMeans(BaseSemanticEncoder):
     """
     Residual Quantization with K-Means (RQ-KMeans).
     Supports standard K-Means and Constrained K-Means (balanced).
+    """
+
+from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
+
+class RQKMeans(BaseSemanticEncoder):
+    """
+    Residual Quantization with K-Means (RQ-KMeans).
+    Supports standard K-Means and Constrained K-Means (balanced).
+    Delegates to Numpy or PyTorch backend based on device.
     """
 
     def __init__(
@@ -47,7 +58,7 @@ class RQKMeans(BaseSemanticEncoder):
         self.random_state = random_state
         self.verbose = verbose
 
-        self.codebooks_: List[np.ndarray] = [] # List of (K_l, D) arrays
+        self.codebooks_: List[np.ndarray] = [] # List of (K_l, D) arrays (Always stored as Numpy on CPU for master state)
         self.D_ = None
 
         if self.implementation == "constrained" and not HAS_CONSTRAINED:
@@ -57,6 +68,13 @@ class RQKMeans(BaseSemanticEncoder):
             )
 
     def fit(self, X: ArrayLike, *, device: str = "cpu") -> "RQKMeans":
+        if device == "cpu":
+            self._fit_numpy(X)
+        else:
+            self._fit_torch(X, device)
+        return self
+        
+    def _fit_numpy(self, X: ArrayLike):
         X = np.asarray(X, dtype=np.float32)
         N, D = X.shape
         self.D_ = D
@@ -70,7 +88,7 @@ class RQKMeans(BaseSemanticEncoder):
             n_clusters_l = self.n_clusters[l]
             
             if self.verbose:
-                print(f"Training level {l+1}/{self.n_levels} (K={n_clusters_l})...")
+                print(f"Training level {l+1}/{self.n_levels} (K={n_clusters_l}) on CPU...")
             
             # Determine seed for this level
             level_seed = self.random_state + l if self.random_state is not None else None
@@ -98,18 +116,6 @@ class RQKMeans(BaseSemanticEncoder):
                     random_state=level_seed,
                     n_init=10,
                 )
-
-            # If metric is cosine, we normalize residuals before clustering for standard KMeans
-            # But RQ usually works on residuals in Euclidean space. 
-            # If user wants cosine, standard practice for simple RQ is to normalize input data
-            # and then use Euclidean K-means on the sphere, or use Spherical K-means.
-            # Sklearn KMeans is Euclidean. For MVP, we stick to Euclidean on residuals.
-            # If metric='cosine' was requested, we assume input X is normalized or we normalize it,
-            # but standard KMeans minimizes variance (Euclidean).
-            # We will proceed with Euclidean on residuals for MVP simplicity as strictly speaking
-            # "cosine" metric implies Spherical K-means which sklearn doesn't support natively.
-            # We will treat 'metric' parameter primarily for matching in encode/inference if we want to be precise,
-            # but for training standard KMeans is Euclidean.
             
             kmeans.fit(residuals)
             centers = kmeans.cluster_centers_
@@ -120,13 +126,36 @@ class RQKMeans(BaseSemanticEncoder):
             # Update residuals
             # R_{l+1} = R_l - C_l[codes_l]
             residuals = residuals - centers[labels]
-            
-        return self
+
+    def _fit_torch(self, X: ArrayLike, device: str):
+        # Delegate to RQKMeansTorch
+        torch_model = RQKMeansTorch(
+            n_levels=self.n_levels,
+            n_clusters=self.n_clusters,
+            metric=self.metric,
+            implementation=self.implementation,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            random_state=self.random_state,
+            verbose=self.verbose,
+            device=device
+        )
+        torch_model.fit(X)
+        
+        # Sync codebooks back to Numpy/CPU
+        self.D_ = torch_model.D_
+        self.codebooks_ = [cb.cpu().numpy() for cb in torch_model.codebooks_]
 
     def encode(self, X: ArrayLike, *, device: str = "cpu", batch_size: Optional[int] = None) -> np.ndarray:
         if not self.codebooks_:
             raise RuntimeError("Model is not fitted yet.")
             
+        if device == "cpu":
+            return self._encode_numpy(X, batch_size)
+        else:
+            return self._encode_torch(X, device, batch_size)
+
+    def _encode_numpy(self, X: ArrayLike, batch_size: Optional[int] = None) -> np.ndarray:
         X = np.asarray(X, dtype=np.float32)
         N = X.shape[0]
         
@@ -155,6 +184,24 @@ class RQKMeans(BaseSemanticEncoder):
                 residuals = residuals - codebook[batch_codes]
                 
         return codes
+
+    def _encode_torch(self, X: ArrayLike, device: str, batch_size: Optional[int] = None) -> np.ndarray:
+        # Reconstruct torch model (lightweight wrapper)
+        torch_model = RQKMeansTorch(
+            n_levels=self.n_levels,
+            n_clusters=self.n_clusters,
+            metric=self.metric,
+            implementation=self.implementation,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            random_state=self.random_state,
+            verbose=self.verbose,
+            device=device
+        )
+        # Load codebooks into torch model
+        torch_model.codebooks_ = [torch.from_numpy(cb).to(device) for cb in self.codebooks_]
+        
+        return torch_model.encode(X, batch_size=batch_size)
 
     def semantic_id(self, codes: np.ndarray, *, sep: str = "-") -> List[str]:
         # codes: (N, L)
