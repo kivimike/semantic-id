@@ -4,6 +4,7 @@ import pytest
 import os
 from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
 from semantic_id.algorithms.rq_kmeans import RQKMeans
+from semantic_id.utils.clustering import _initialize_centroids_kmeans_plus_plus
 
 def test_kmeans_plus_plus_initialization():
     """Test that k-means++ initialization works and picks points from X."""
@@ -25,7 +26,7 @@ def test_kmeans_plus_plus_initialization():
     )
     
     # Test initialization
-    centroids = model._initialize_centroids_kmeans_plus_plus(X, K, seed=42)
+    centroids = _initialize_centroids_kmeans_plus_plus(X, K, seed=42)
     
     assert centroids.shape == (K, D)
     
@@ -72,9 +73,9 @@ def test_kmeans_plus_plus_determinism():
         device="cpu"
     )
     
-    c1 = model._initialize_centroids_kmeans_plus_plus(X, K, seed=42)
-    c2 = model._initialize_centroids_kmeans_plus_plus(X, K, seed=42)
-    c3 = model._initialize_centroids_kmeans_plus_plus(X, K, seed=43)
+    c1 = _initialize_centroids_kmeans_plus_plus(X, K, seed=42)
+    c2 = _initialize_centroids_kmeans_plus_plus(X, K, seed=42)
+    c3 = _initialize_centroids_kmeans_plus_plus(X, K, seed=43)
     
     assert torch.allclose(c1, c2)
     assert not torch.allclose(c1, c3)

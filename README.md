@@ -157,7 +157,36 @@ model.save("my_rq_model")
 loaded_model = RQKMeans.load("my_rq_model")
 ```
 
-### 7. Reproducibility & Cross-Device Consistency
+### 7. Neural Network Support (RQ-VAE)
+
+For complex data distributions, you can use **RQ-VAE** (Residual Quantization Variational AutoEncoder). This trains a neural network to learn the codebooks, often resulting in better reconstruction quality than standard K-Means.
+
+It also supports the **RQ-KMeans+** strategy: initializing the VAE codebooks from a pre-trained RQ-KMeans model for faster convergence.
+
+```python
+from semantic_id.algorithms.rq_vae import RQVAE
+
+# Initialize
+model = RQVAE(
+    in_dim=768,
+    num_emb_list=[256, 256, 256],
+    e_dim=768,
+    layers=[512, 256],
+    device="cuda" # or "mps"
+)
+
+# Train
+model.fit(X_train)
+
+# Generate IDs
+ids = model.semantic_id(model.encode(X_test))
+```
+
+See **[examples/rq_vae_example.py](examples/rq_vae_example.py)** for a full example of:
+*   Training standard RQ-VAE.
+*   Using **RQ-KMeans+** warm-start strategy.
+
+### 8. Reproducibility & Cross-Device Consistency
 
 To ensure **identical Semantic IDs** across different machines or devices (e.g., training on a powerful GPU server and inferring on a CPU edge device), follow this workflow:
 
@@ -189,6 +218,6 @@ Do **not** retrain (`fit`) on the second machine if you need the IDs to be consi
 
 ### Future Plans (v1.0+)
 - [x] **Torch Backend**: Implement `RQKMeans` using PyTorch for GPU acceleration (`torch.cdist`).
-- [ ] **RQ-VAE**: Add neural network-based Residual Quantization VAE support.
+- [x] **RQ-VAE**: Add neural network-based Residual Quantization VAE support.
 - [ ] **Experiment Runner**: CLI tool for sweeping hyperparameters (L, K) and comparing collision rates.
 - [ ] **Advanced Metrics**: Add reconstruction quality metrics (recall@K for retrieval).

@@ -3,6 +3,12 @@ import torch
 from typing import Optional, Union, List, Literal
 from sklearn.cluster import KMeans
 
+from semantic_id.utils.clustering import (
+    kmeans_torch, 
+    sinkhorn_algorithm, 
+    center_distance_for_constraint
+)
+
 # For constrained clustering fallback
 try:
     from k_means_constrained import KMeansConstrained
@@ -114,9 +120,6 @@ class RQKMeansTorch:
                 
             else:
                 # Standard K-Means on GPU
-                # Using a simple Torch implementation or FAISS-like logic.
-                # Since we don't want extra heavy dependencies like faiss-gpu right now,
-                # we implement a basic Loyd's algorithm in Torch.
                 centers, labels = self._kmeans_torch(residuals, K, seed)
             
             self.codebooks_.append(centers)
@@ -176,161 +179,23 @@ class RQKMeansTorch:
         
         return codes
 
-    def _initialize_centroids_kmeans_plus_plus(self, X: torch.Tensor, K: int, seed: Optional[int]) -> torch.Tensor:
-        """
-        Initialize centroids using k-means++ algorithm.
-        This ensures better convergence and alignment with sklearn's default behavior.
-        """
-        N, D = X.shape
-        
-        if seed is not None:
-            torch.manual_seed(seed)
-            np.random.seed(seed)
-            
-        # 1. Choose first center randomly
-        # We use a random index from 0 to N-1
-        # Use numpy for initial index to be deterministic with seed if desired, 
-        # or torch if we want everything on device. 
-        # Since we want to align with general behavior, random uniform is fine.
-        
-        # We'll use torch on device for speed
-        first_center_idx = torch.randint(0, N, (1,), device=self.device).item()
-        
-        centers = torch.empty((K, D), device=self.device, dtype=X.dtype)
-        centers[0] = X[first_center_idx]
-        
-        # To store nearest distance squared for each point
-        # Initialize with infinity
-        closest_dist_sq = torch.full((N,), float('inf'), device=self.device)
-        
-        # 2. Loop to find other K-1 centers
-        for i in range(1, K):
-            # Distance from the last added center to all points
-            # We use squared euclidean distance
-            # ||a - b||^2
-            # current_center is (1, D), X is (N, D)
-            # We can use (X - center)^2 . sum(dim=1)
-            current_center = centers[i-1].unsqueeze(0) # (1, D)
-            
-            # Efficient distance computation
-            # dists = torch.sum((X - current_center) ** 2, dim=1) 
-            # OR better: use cdist if D is large, but direct diff is fine here.
-            # actually cdist returns L2, we want squared L2.
-            dist_sq_to_new_center = torch.sum((X - current_center) ** 2, dim=1)
-            
-            # Update closest distance for each point
-            closest_dist_sq = torch.minimum(closest_dist_sq, dist_sq_to_new_center)
-            
-            # 3. Choose new center with probability proportional to D(x)^2
-            # We use torch.multinomial for weighted sampling
-            # probs = closest_dist_sq / closest_dist_sq.sum()
-            # multinomial expects weights, it normalizes internally.
-            
-            # Numerical stability: if sum is 0 (all points on top of centers), pick random
-            if closest_dist_sq.sum() == 0:
-                 candidate_idx = torch.randint(0, N, (1,), device=self.device).item()
-            else:
-                candidate_idx = torch.multinomial(closest_dist_sq, 1).item()
-                
-            centers[i] = X[candidate_idx]
-            
-        return centers
-
     def _kmeans_torch(self, X: torch.Tensor, K: int, seed: Optional[int]):
         """
-        Simple K-Means implementation in PyTorch.
+        Simple K-Means implementation in PyTorch using shared utils.
         """
-        N, D = X.shape
+        centers = kmeans_torch(
+            X, 
+            num_clusters=K, 
+            max_iter=self.max_iter, 
+            tol=self.tol, 
+            seed=seed
+        )
         
-        # 1. Initialize Centers
-        if seed is not None:
-            torch.manual_seed(seed)
+        # Compute labels for residual update
+        dists = torch.cdist(X, centers, p=2.0)
+        labels = torch.argmin(dists, dim=1)
         
-        # Use k-means++ initialization
-        centers = self._initialize_centroids_kmeans_plus_plus(X, K, seed)
-        
-        prev_centers = None
-        
-        for i in range(self.max_iter):
-            # E-step: Assign labels
-            # (N, K) distances
-            dists = torch.cdist(X, centers, p=2.0)
-            labels = torch.argmin(dists, dim=1)
-            
-            # M-step: Update centers
-            new_centers = torch.zeros_like(centers)
-            # Efficiently sum points for each cluster
-            # We can use scatter_add or loop over K
-            # Since K is usually small (256), loop is okay-ish on GPU if vectorized?
-            # Better: use index_add_
-            
-            # Count points per cluster
-            counts = torch.bincount(labels, minlength=K).float()
-            
-            # Sum points per cluster
-            # We need to broadcast labels to (N, D) or use index_add with flattened
-            # Actually simplest way in torch:
-            for k in range(K):
-                mask = (labels == k)
-                if mask.any():
-                    new_centers[k] = X[mask].mean(dim=0)
-                else:
-                    # Handle empty cluster: keep old center or re-init?
-                    # Keep old center is simple
-                    new_centers[k] = centers[k]
-                    
-            # Check convergence
-            shift = torch.norm(centers - new_centers)
-            centers = new_centers
-            
-            if shift < self.tol:
-                break
-                
         return centers, labels
-
-    def _sinkhorn_algorithm(self, distances: torch.Tensor, epsilon: float = 0.003, iterations: int = 100):
-        """
-        Sinkhorn algorithm to balance cluster assignment.
-        Reference: reference/rq/models/layers.py
-        """
-        Q = torch.exp(- distances / epsilon)
-        
-        B = Q.shape[0] # number of samples
-        K = Q.shape[1] # number of clusters
-        
-        # make the matrix sums to 1
-        sum_Q = Q.sum(-1, keepdim=True).sum(-2, keepdim=True)
-        Q /= sum_Q
-        
-        for it in range(iterations):
-            # normalize each column: total weight per sample must be 1/B
-            Q /= torch.sum(Q, dim=1, keepdim=True)
-            Q /= B
-            
-            # normalize each row: total weight per prototype must be 1/K
-            Q /= torch.sum(Q, dim=0, keepdim=True)
-            Q /= K
-            
-        Q *= B # the columns must sum to 1 so that Q is an assignment probability
-        return Q
-
-    def _center_distance_for_constraint(self, distances: torch.Tensor):
-        """
-        Adjust distances to help Sinkhorn stability.
-        Reference: reference/rq/models/vq.py
-        """
-        max_distance = distances.max()
-        min_distance = distances.min()
-        
-        middle = (max_distance + min_distance) / 2
-        amplitude = max_distance - middle + 1e-5
-        
-        # Center around 0 with amplitude 1? No, original implementation:
-        # centered_distances = (distances - middle) / amplitude
-        # Actually reference code is truncated in my view, but usually it centers/scales.
-        # Let's assume standard centering.
-        centered_distances = (distances - middle) / amplitude
-        return centered_distances
 
     def _constrained_kmeans_torch(self, X: torch.Tensor, K: int, seed: Optional[int]):
         """
@@ -349,23 +214,11 @@ class RQKMeansTorch:
         for i in range(self.max_iter):
             # E-step: Assign labels with Sinkhorn balancing
             dists = torch.cdist(X, centers, p=2.0) # (N, K)
-            
-            # Use squared distances for Sinkhorn usually? 
-            # Reference uses "distances", where distances usually means L2 or squared L2.
-            # RQKMeans uses L2. Let's stick to dists (which is L2 norm from cdist).
-            # But usually energy is squared distance.
             dists_sq = dists ** 2
             
-            # Sinkhorn needs adjusted distances to be stable and work as logits
-            # d_centered = self._center_distance_for_constraint(dists_sq)
-            # Actually simple epsilon scaling is often enough.
-            # Using reference logic:
-            # d = center_distance_for_constraint(d)
-            # Q = sinkhorn_algorithm(d, epsilon, iters)
-            
-            d_centered = self._center_distance_for_constraint(dists_sq)
-            Q = self._sinkhorn_algorithm(d_centered, epsilon=0.1, iterations=30) 
+            d_centered = center_distance_for_constraint(dists_sq)
             # Epsilon and iters are hyperparameters. 0.1 and 30 are reasonable starts.
+            Q = sinkhorn_algorithm(d_centered, epsilon=0.1, sinkhorn_iterations=30) 
             
             # Hard assignment from Q
             labels = torch.argmax(Q, dim=1)
