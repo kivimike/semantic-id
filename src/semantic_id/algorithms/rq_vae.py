@@ -37,7 +37,7 @@ class RQVAE(BaseSemanticEncoder):
         batch_size: int = 2048,
         epochs: int = 100,
         device: str = "cpu",
-        verbose: bool = False
+        verbose: Union[bool, int] = False
     ):
         self.in_dim = in_dim
         self.num_emb_list = num_emb_list if num_emb_list is not None else [256, 256, 256, 256]
@@ -97,6 +97,21 @@ class RQVAE(BaseSemanticEncoder):
         self.module.to(target_device)
         self.module.train()
         
+        # Determine logging interval
+        log_interval = 10
+        if isinstance(self.verbose, int) and not isinstance(self.verbose, bool):
+             if self.verbose > 0:
+                 log_interval = self.verbose
+        
+        # Setup monitoring batch if verbose
+        X_monitor = None
+        if self.verbose:
+            monitor_size = min(len(X_tensor), 2048)
+            # Use a deterministic selection for consistent monitoring if possible, 
+            # or random but constant throughout training
+            indices = torch.randperm(len(X_tensor))[:monitor_size]
+            X_monitor = X_tensor[indices].to(target_device)
+
         # Apply RQ-KMeans+ Strategy if requested
         if pretrained_codebook_path:
             if self.verbose:
@@ -130,10 +145,37 @@ class RQVAE(BaseSemanticEncoder):
                 total_loss += loss.item()
                 recon_loss += r_loss.item()
                 
-            if self.verbose and (epoch + 1) % 10 == 0:
+            if self.verbose and (epoch + 1) % log_interval == 0:
                 avg_loss = total_loss / len(dataloader)
                 avg_recon = recon_loss / len(dataloader)
-                print(f"Epoch {epoch+1}/{self.epochs} - Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f})")
+                
+                # Calculate Stability Metrics on Monitor Batch
+                metrics_str = ""
+                if X_monitor is not None:
+                    with torch.no_grad():
+                        self.module.eval()
+                        # get_indices returns (B, depth)
+                        codes = self.module.get_indices(X_monitor)
+                        self.module.train()
+                    
+                    level_stats = []
+                    for i, n_emb in enumerate(self.num_emb_list):
+                        level_codes = codes[:, i]
+                        # Utilization
+                        n_unique = len(torch.unique(level_codes))
+                        util_pct = (n_unique / n_emb) * 100
+                        
+                        # Perplexity
+                        counts = torch.bincount(level_codes.long(), minlength=n_emb).float()
+                        probs = counts / counts.sum()
+                        # prevent log(0)
+                        perp = torch.exp(-torch.sum(probs * torch.log(probs + 1e-10))).item()
+                        
+                        level_stats.append(f"L{i}: {util_pct:.1f}% (Perp: {perp:.1f})")
+                    
+                    metrics_str = " - " + " | ".join(level_stats)
+
+                print(f"Epoch {epoch+1}/{self.epochs} - Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}){metrics_str}")
                 
         self.module.eval()
         # Move back to CPU to save memory if needed? 
