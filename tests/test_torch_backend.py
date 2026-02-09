@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import torch
+
 from semantic_id.algorithms.rq_kmeans import RQKMeans
 from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
 

@@ -1,6 +1,7 @@
 """Test that cosine metric raises NotImplementedError."""
 
 import pytest
+
 from semantic_id.algorithms.rq_kmeans import RQKMeans
 
 

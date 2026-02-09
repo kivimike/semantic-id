@@ -1,6 +1,8 @@
 import os
+
 import numpy as np
 import pytest
+
 from semantic_id.algorithms.rq_kmeans import RQKMeans
 
 

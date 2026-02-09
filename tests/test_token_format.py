@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from semantic_id.core import codes_to_ids
 from semantic_id.algorithms.rq_kmeans import RQKMeans
+from semantic_id.core import codes_to_ids
 
 
 def test_codes_to_ids_plain():

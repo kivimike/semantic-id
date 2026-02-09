@@ -1,15 +1,16 @@
 import copy
 import json
 import os
-import torch
+from typing import Dict, List, Literal, Optional, Union
+
 import numpy as np
+import torch
 from torch.utils.data import DataLoader, TensorDataset
-from typing import List, Optional, Union, Dict, Literal
 from tqdm import tqdm
 
-from semantic_id.core import BaseSemanticEncoder, ArrayLike
-from semantic_id.algorithms.rq_vae_module import RQVAEModule
 from semantic_id.algorithms.rq_kmeans_plus import apply_rqkmeans_plus_strategy
+from semantic_id.algorithms.rq_vae_module import RQVAEModule
+from semantic_id.core import ArrayLike, BaseSemanticEncoder
 
 
 class RQVAE(BaseSemanticEncoder):

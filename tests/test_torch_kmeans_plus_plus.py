@@ -1,9 +1,11 @@
-import numpy as np
-import torch
-import pytest
 import os
-from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
+
+import numpy as np
+import pytest
+import torch
+
 from semantic_id.algorithms.rq_kmeans import RQKMeans
+from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
 from semantic_id.utils.clustering import _initialize_centroids_kmeans_plus_plus
 
 

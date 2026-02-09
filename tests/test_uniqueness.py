@@ -1,5 +1,7 @@
 import os
+
 import pytest
+
 from semantic_id.uniqueness.resolver import UniqueIdResolver
 from semantic_id.uniqueness.stores import InMemoryCollisionStore, SQLiteCollisionStore
 

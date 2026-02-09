@@ -32,5 +32,8 @@ dev = [
     "flake8",
 ]
 
+[tool.isort]
+profile = "black"
+
 [tool.setuptools.packages.find]
 where = ["src"]

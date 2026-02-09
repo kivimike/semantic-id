@@ -1,12 +1,14 @@
 import os
-import torch
+
 import numpy as np
 import pytest
-from semantic_id.algorithms.rq_vae import RQVAE
+import torch
+
 from semantic_id.algorithms.rq_kmeans_plus import (
     ResidualEncoderWrapper,
     apply_rqkmeans_plus_strategy,
 )
+from semantic_id.algorithms.rq_vae import RQVAE
 
 
 def test_rq_vae_initialization():

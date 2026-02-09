@@ -1,9 +1,10 @@
+import logging
+import os
+from typing import Optional
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import os
-import logging
-from typing import Optional
 
 
 def get_last_linear_layer(module: nn.Module) -> Optional[nn.Linear]:

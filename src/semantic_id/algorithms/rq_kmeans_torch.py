@@ -1,13 +1,14 @@
+from typing import List, Literal, Optional, Union
+
 import numpy as np
 import torch
-from typing import Optional, Union, List, Literal
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 
 from semantic_id.utils.clustering import (
+    center_distance_for_constraint,
     kmeans_torch,
     sinkhorn_algorithm,
-    center_distance_for_constraint,
 )
 
 # For constrained clustering fallback

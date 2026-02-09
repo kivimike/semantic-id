@@ -1,13 +1,14 @@
+from typing import List, Optional, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.init import xavier_normal_
-from typing import List, Union, Optional
 
 from semantic_id.utils.clustering import (
+    center_distance_for_constraint,
     kmeans_torch,
     sinkhorn_algorithm,
-    center_distance_for_constraint,
 )
 
 

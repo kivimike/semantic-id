@@ -1,7 +1,8 @@
-from abc import ABC, abstractmethod
-from typing import List, Optional, Union, Dict, Any, Literal
-import numpy as np
 import string
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Literal, Optional, Union
+
+import numpy as np
 
 ArrayLike = Union[np.ndarray, List[List[float]]]
 

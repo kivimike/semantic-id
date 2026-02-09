@@ -1,5 +1,6 @@
+from typing import Any, Dict, List, Optional, Union
+
 import numpy as np
-from typing import Dict, Any, Optional, List, Union
 from sklearn.neighbors import NearestNeighbors
 
 try:

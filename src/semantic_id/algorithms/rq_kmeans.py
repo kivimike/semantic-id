@@ -1,14 +1,15 @@
 import json
 import os
-from typing import List, Optional, Union, Literal
+from typing import List, Literal, Optional, Union
+
 import numpy as np
 import torch
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import euclidean_distances
 from tqdm import tqdm
 
-from semantic_id.core import BaseSemanticEncoder, ArrayLike
 from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
+from semantic_id.core import ArrayLike, BaseSemanticEncoder
 
 try:
     from k_means_constrained import KMeansConstrained

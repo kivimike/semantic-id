@@ -1,6 +1,7 @@
-import torch
-import numpy as np
 from typing import Optional, Tuple
+
+import numpy as np
+import torch
 
 
 def sinkhorn_algorithm(

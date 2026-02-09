@@ -1,19 +1,20 @@
 import json
 import os
 import shutil
-import numpy as np
 from typing import List, Optional, Type
 
-from semantic_id.core import BaseSemanticEncoder, ArrayLike
+import numpy as np
+
+from semantic_id.core import ArrayLike, BaseSemanticEncoder
 from semantic_id.uniqueness.resolver import (
     BaseResolver,
-    UniqueIdResolver,
     SinkhornResolver,
+    UniqueIdResolver,
 )
 from semantic_id.uniqueness.stores import (
+    CollisionStore,
     InMemoryCollisionStore,
     SQLiteCollisionStore,
-    CollisionStore,
 )
 
 # Registry of encoder types for deserialization
