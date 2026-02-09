@@ -155,9 +155,20 @@ class VectorQuantizer(nn.Module):
             # d is effectively squared distance if latent and weights are unnormalized?
             # Yes, standard L2 squared expansion.
             d_centered = center_distance_for_constraint(d)
-            d_centered = d_centered.double()
+
+            # Sinkhorn requires float64 for numerical stability (exp(-d/eps)
+            # with small eps overflows in float32). MPS doesn't support float64,
+            # so we move the computation to CPU for that step.
+            original_device = d_centered.device
+            try:
+                d_centered = d_centered.double()
+            except TypeError:
+                # MPS and some other backends don't support float64 —
+                # move to CPU where double precision is available.
+                d_centered = d_centered.cpu().double()
             
             Q = sinkhorn_algorithm(d_centered, self.sk_epsilon, self.sk_iters)
+            Q = Q.to(device=original_device, dtype=d.dtype)
 
             if torch.isnan(Q).any() or torch.isinf(Q).any():
                 print(f"Sinkhorn Algorithm returns nan/inf values.")
