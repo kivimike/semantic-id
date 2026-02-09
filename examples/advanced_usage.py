@@ -10,7 +10,6 @@ This script demonstrates:
 
 import json
 import os
-import shutil
 import threading
 import numpy as np
 from typing import Dict

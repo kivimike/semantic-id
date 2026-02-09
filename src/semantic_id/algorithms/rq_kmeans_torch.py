@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from typing import Optional, Union, List, Literal
 from sklearn.cluster import KMeans
+from tqdm import tqdm
 
 from semantic_id.utils.clustering import (
     kmeans_torch, 
@@ -66,13 +67,17 @@ class RQKMeansTorch:
         # Residuals start as X
         residuals = X.clone()
         
-        for l in range(self.n_levels):
+        level_iter = range(self.n_levels)
+        if self.verbose:
+            level_iter = tqdm(level_iter, desc=f"RQ-KMeans fit ({self.device})", unit="level")
+        
+        for l in level_iter:
             K = self.n_clusters[l]
-            if self.verbose:
-                print(f"Training level {l+1}/{self.n_levels} (K={K}) on {self.device}...")
             
-            # Seed handling
-            seed = self.random_state + l if self.random_state is not None else None
+            # Seed handling - match CPU backend's seed generation for reproducibility
+            seed = None
+            if self.random_state is not None:
+                seed = int(np.random.RandomState(self.random_state + l).randint(0, 2**31 - 1))
             
             centers = None
             labels = None
@@ -149,7 +154,11 @@ class RQKMeansTorch:
         # We collect them on CPU to avoid OOM for large N
         codes = np.zeros((N, self.n_levels), dtype=np.int32)
         
-        for start_idx in range(0, N, batch_size):
+        batch_starts = range(0, N, batch_size)
+        if self.verbose and N > batch_size:
+            batch_starts = tqdm(batch_starts, desc=f"RQ-KMeans encode ({self.device})", unit="batch")
+        
+        for start_idx in batch_starts:
             end_idx = min(start_idx + batch_size, N)
             batch_X = X[start_idx:end_idx] # (B, D)
             

@@ -97,6 +97,6 @@ class SQLiteCollisionStore(CollisionStore):
                     cursor.execute("UPDATE collisions SET count = ? WHERE key = ?", (current + 1, key))
                 conn.commit()
                 return current
-            except:
+            except Exception:
                 conn.rollback()
                 raise

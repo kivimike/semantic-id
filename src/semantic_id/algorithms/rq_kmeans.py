@@ -1,11 +1,11 @@
 import json
 import os
-import pickle
-from typing import List, Optional, Union, Dict, Any, Literal
+from typing import List, Optional, Union, Literal
 import numpy as np
 import torch
 from sklearn.cluster import KMeans
-from sklearn.metrics.pairwise import euclidean_distances, cosine_distances
+from sklearn.metrics.pairwise import euclidean_distances
+from tqdm import tqdm
 
 from semantic_id.core import BaseSemanticEncoder, ArrayLike
 from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
@@ -15,14 +15,6 @@ try:
     HAS_CONSTRAINED = True
 except ImportError:
     HAS_CONSTRAINED = False
-
-class RQKMeans(BaseSemanticEncoder):
-    """
-    Residual Quantization with K-Means (RQ-KMeans).
-    Supports standard K-Means and Constrained K-Means (balanced).
-    """
-
-from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
 
 class RQKMeans(BaseSemanticEncoder):
     """
@@ -63,6 +55,11 @@ class RQKMeans(BaseSemanticEncoder):
         self.codebooks_: List[np.ndarray] = [] # List of (K_l, D) arrays (Always stored as Numpy on CPU for master state)
         self.D_ = None
 
+        if self.metric == "cosine":
+            raise NotImplementedError(
+                "Cosine metric is not yet implemented. Please use metric='l2'."
+            )
+
         if self.implementation == "constrained" and not HAS_CONSTRAINED:
             raise ImportError(
                 "k-means-constrained is required for implementation='constrained'. "
@@ -86,10 +83,14 @@ class RQKMeans(BaseSemanticEncoder):
         
         residuals = X.copy()
         
-        for l in range(self.n_levels):
+        level_iter = range(self.n_levels)
+        if self.verbose:
+            level_iter = tqdm(level_iter, desc="RQ-KMeans fit (CPU)", unit="level")
+        
+        for l in level_iter:
             n_clusters_l = self.n_clusters[l]
             
-            if self.verbose:
+            if self.verbose and not isinstance(level_iter, tqdm):
                 print(f"Training level {l+1}/{self.n_levels} (K={n_clusters_l}) on CPU...")
             
             # Determine seed for this level
@@ -179,7 +180,11 @@ class RQKMeans(BaseSemanticEncoder):
             
         codes = np.zeros((N, self.n_levels), dtype=np.int32)
         
-        for start_idx in range(0, N, batch_size):
+        batch_starts = range(0, N, batch_size)
+        if self.verbose and N > batch_size:
+            batch_starts = tqdm(batch_starts, desc="RQ-KMeans encode (CPU)", unit="batch")
+        
+        for start_idx in batch_starts:
             end_idx = min(start_idx + batch_size, N)
             batch_X = X[start_idx:end_idx] # (B, D)
             
@@ -219,15 +224,7 @@ class RQKMeans(BaseSemanticEncoder):
         
         return torch_model.encode(X, batch_size=batch_size)
 
-    def semantic_id(self, codes: np.ndarray, *, sep: str = "-") -> List[str]:
-        # codes: (N, L)
-        result = []
-        for i in range(codes.shape[0]):
-            row_codes = codes[i]
-            # Join codes as string
-            sid = sep.join(map(str, row_codes))
-            result.append(sid)
-        return result
+    # semantic_id() inherited from BaseSemanticEncoder (supports plain and token formats)
 
     def decode(self, codes: np.ndarray) -> np.ndarray:
         if not self.codebooks_:

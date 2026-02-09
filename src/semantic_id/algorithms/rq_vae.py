@@ -1,9 +1,11 @@
+import copy
 import json
 import os
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from typing import List, Optional, Union, Dict, Literal
+from tqdm import tqdm
 
 from semantic_id.core import BaseSemanticEncoder, ArrayLike
 from semantic_id.algorithms.rq_vae_module import RQVAEModule
@@ -34,8 +36,13 @@ class RQVAE(BaseSemanticEncoder):
         sk_iters: int = 100,
         # Training params
         lr: float = 1e-4,
+        weight_decay: float = 0.0,
         batch_size: int = 2048,
         epochs: int = 100,
+        lr_scheduler: Optional[Literal["cosine", "step", "constant_with_warmup"]] = None,
+        warmup_epochs: int = 0,
+        lr_step_size: int = 50,
+        lr_gamma: float = 0.5,
         device: str = "cpu",
         verbose: Union[bool, int] = False
     ):
@@ -54,8 +61,13 @@ class RQVAE(BaseSemanticEncoder):
         self.sk_iters = sk_iters
         
         self.lr = lr
+        self.weight_decay = weight_decay
         self.batch_size = batch_size
         self.epochs = epochs
+        self.lr_scheduler = lr_scheduler
+        self.warmup_epochs = warmup_epochs
+        self.lr_step_size = lr_step_size
+        self.lr_gamma = lr_gamma
         self.device = device
         self.verbose = verbose
         
@@ -75,6 +87,59 @@ class RQVAE(BaseSemanticEncoder):
             sk_epsilons=self.sk_epsilons,
             sk_iters=self.sk_iters
         )
+        
+        # Training history (populated during fit)
+        self.history_: Dict[str, List[float]] = {}
+
+    def _build_scheduler(self, optimizer: torch.optim.Optimizer, steps_per_epoch: int):
+        """Build a learning rate scheduler based on configuration."""
+        if self.lr_scheduler is None:
+            return None
+        
+        total_steps = self.epochs * steps_per_epoch
+        warmup_steps = self.warmup_epochs * steps_per_epoch
+        
+        if self.lr_scheduler == "cosine":
+            # Cosine annealing with optional warmup
+            if warmup_steps > 0:
+                def lr_lambda(step):
+                    if step < warmup_steps:
+                        return float(step) / float(max(1, warmup_steps))
+                    progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+                    return 0.5 * (1.0 + np.cos(np.pi * progress))
+                return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            else:
+                return torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, T_max=total_steps
+                )
+        
+        elif self.lr_scheduler == "step":
+            step_epochs = self.lr_step_size * steps_per_epoch
+            return torch.optim.lr_scheduler.StepLR(
+                optimizer, step_size=step_epochs, gamma=self.lr_gamma
+            )
+        
+        elif self.lr_scheduler == "constant_with_warmup":
+            if warmup_steps > 0:
+                def lr_lambda(step):
+                    if step < warmup_steps:
+                        return float(step) / float(max(1, warmup_steps))
+                    return 1.0
+                return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            return None
+        
+        return None
+
+    def _compute_collision_rate(self, codes: torch.Tensor) -> float:
+        """Compute collision rate for a batch of codes."""
+        N = codes.shape[0]
+        # Convert to numpy for unique check
+        codes_np = codes.cpu().numpy().astype(np.int32)
+        codes_view = np.ascontiguousarray(codes_np).view(
+            np.dtype((np.void, codes_np.dtype.itemsize * codes_np.shape[1]))
+        )
+        n_unique = len(np.unique(codes_view))
+        return 1.0 - (n_unique / N)
         
     def fit(self, X: ArrayLike, *, device: str = None, pretrained_codebook_path: Optional[str] = None) -> "RQVAE":
         """
@@ -107,8 +172,6 @@ class RQVAE(BaseSemanticEncoder):
         X_monitor = None
         if self.verbose:
             monitor_size = min(len(X_tensor), 2048)
-            # Use a deterministic selection for consistent monitoring if possible, 
-            # or random but constant throughout training
             indices = torch.randperm(len(X_tensor))[:monitor_size]
             X_monitor = X_tensor[indices].to(target_device)
 
@@ -119,12 +182,36 @@ class RQVAE(BaseSemanticEncoder):
             apply_rqkmeans_plus_strategy(self.module, pretrained_codebook_path, target_device)
             
         # Training Setup
-        optimizer = torch.optim.AdamW(self.module.parameters(), lr=self.lr)
+        optimizer = torch.optim.AdamW(
+            self.module.parameters(), lr=self.lr, weight_decay=self.weight_decay
+        )
         dataset = TensorDataset(X_tensor)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
+        # LR Scheduler
+        scheduler = self._build_scheduler(optimizer, steps_per_epoch=len(dataloader))
+        
+        # Checkpointing state
+        best_loss = float("inf")
+        best_collision_rate = float("inf")
+        best_loss_state = None
+        best_collision_state = None
+        
+        # Training history
+        self.history_ = {
+            "loss": [],
+            "recon_loss": [],
+            "collision_rate": [],
+            "lr": [],
+        }
+        
         # Training Loop
-        for epoch in range(self.epochs):
+        epoch_iter = range(self.epochs)
+        if self.verbose:
+            epoch_iter = tqdm(epoch_iter, desc="RQ-VAE training", unit="epoch")
+        
+        for epoch in epoch_iter:
+            self.module.train()
             total_loss = 0.0
             recon_loss = 0.0
             
@@ -142,19 +229,55 @@ class RQVAE(BaseSemanticEncoder):
                 loss.backward()
                 optimizer.step()
                 
+                if scheduler is not None:
+                    scheduler.step()
+                
                 total_loss += loss.item()
                 recon_loss += r_loss.item()
+            
+            avg_loss = total_loss / len(dataloader)
+            avg_recon = recon_loss / len(dataloader)
+            current_lr = optimizer.param_groups[0]["lr"]
+            
+            # Record history
+            self.history_["loss"].append(avg_loss)
+            self.history_["recon_loss"].append(avg_recon)
+            self.history_["lr"].append(current_lr)
+            
+            # Compute collision rate on monitor batch for checkpointing
+            collision_rate = 0.0
+            if X_monitor is not None:
+                with torch.no_grad():
+                    self.module.eval()
+                    codes = self.module.get_indices(X_monitor)
+                    collision_rate = self._compute_collision_rate(codes)
+                    self.module.train()
+            
+            self.history_["collision_rate"].append(collision_rate)
+            
+            # Checkpointing: save best by loss
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                best_loss_state = copy.deepcopy(self.module.state_dict())
+            
+            # Checkpointing: save best by collision rate
+            if collision_rate < best_collision_rate:
+                best_collision_rate = collision_rate
+                best_collision_state = copy.deepcopy(self.module.state_dict())
                 
+            # Update tqdm postfix
+            if self.verbose and hasattr(epoch_iter, 'set_postfix'):
+                postfix = {"loss": f"{avg_loss:.4f}", "recon": f"{avg_recon:.4f}"}
+                if X_monitor is not None:
+                    postfix["collision"] = f"{collision_rate:.4f}"
+                epoch_iter.set_postfix(postfix)
+            
             if self.verbose and (epoch + 1) % log_interval == 0:
-                avg_loss = total_loss / len(dataloader)
-                avg_recon = recon_loss / len(dataloader)
-                
                 # Calculate Stability Metrics on Monitor Batch
                 metrics_str = ""
                 if X_monitor is not None:
                     with torch.no_grad():
                         self.module.eval()
-                        # get_indices returns (B, depth)
                         codes = self.module.get_indices(X_monitor)
                         self.module.train()
                     
@@ -168,19 +291,34 @@ class RQVAE(BaseSemanticEncoder):
                         # Perplexity
                         counts = torch.bincount(level_codes.long(), minlength=n_emb).float()
                         probs = counts / counts.sum()
-                        # prevent log(0)
                         perp = torch.exp(-torch.sum(probs * torch.log(probs + 1e-10))).item()
                         
                         level_stats.append(f"L{i}: {util_pct:.1f}% (Perp: {perp:.1f})")
                     
                     metrics_str = " - " + " | ".join(level_stats)
 
-                print(f"Epoch {epoch+1}/{self.epochs} - Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f}){metrics_str}")
+                lr_str = f" - LR: {current_lr:.2e}" if self.lr_scheduler else ""
+                collision_str = f" - Collision: {collision_rate:.4f}" if X_monitor is not None else ""
+                tqdm.write(
+                    f"Epoch {epoch+1}/{self.epochs} - "
+                    f"Loss: {avg_loss:.4f} (Recon: {avg_recon:.4f})"
+                    f"{collision_str}{lr_str}{metrics_str}"
+                )
+        
+        # Restore best model by collision rate (preferred), else best by loss
+        if best_collision_state is not None:
+            self.module.load_state_dict(best_collision_state)
+            if self.verbose:
+                print(
+                    f"Restored best model (collision_rate={best_collision_rate:.4f}, "
+                    f"best_loss={best_loss:.4f})"
+                )
+        elif best_loss_state is not None:
+            self.module.load_state_dict(best_loss_state)
+            if self.verbose:
+                print(f"Restored best model (loss={best_loss:.4f})")
                 
         self.module.eval()
-        # Move back to CPU to save memory if needed? 
-        # Typically we keep it on the device it was trained on or move to CPU for storage.
-        # Let's keep it on device for now.
         return self
 
     def encode(self, X: ArrayLike, *, device: str = None, batch_size: Optional[int] = None) -> np.ndarray:
@@ -201,20 +339,18 @@ class RQVAE(BaseSemanticEncoder):
             dataset = TensorDataset(X_tensor)
             dataloader = DataLoader(dataset, batch_size=bs, shuffle=False)
             
-            for batch in dataloader:
+            batch_iter = dataloader
+            if self.verbose and len(dataloader) > 1:
+                batch_iter = tqdm(dataloader, desc="RQ-VAE encode", unit="batch")
+            
+            for batch in batch_iter:
                 x_batch = batch[0].to(target_device)
                 indices = self.module.get_indices(x_batch)
                 codes_list.append(indices.cpu().numpy().astype(np.int32))
                 
         return np.concatenate(codes_list, axis=0)
 
-    def semantic_id(self, codes: np.ndarray, *, sep: str = "-") -> List[str]:
-        result = []
-        for i in range(codes.shape[0]):
-            row_codes = codes[i]
-            sid = sep.join(map(str, row_codes))
-            result.append(sid)
-        return result
+    # semantic_id() inherited from BaseSemanticEncoder (supports plain and token formats)
 
     def decode(self, codes: np.ndarray) -> np.ndarray:
         # RQ-VAE decoding from indices involves:
