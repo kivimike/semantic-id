@@ -1,7 +1,4 @@
-import os
-
 import numpy as np
-import pytest
 import torch
 
 from semantic_id.algorithms.rq_kmeans_plus import (

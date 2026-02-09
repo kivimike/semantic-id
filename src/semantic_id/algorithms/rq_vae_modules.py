@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List
 
 import torch
 import torch.nn as nn
@@ -186,7 +186,7 @@ class VectorQuantizer(nn.Module):
             Q = Q.to(device=original_device, dtype=d.dtype)
 
             if torch.isnan(Q).any() or torch.isinf(Q).any():
-                print(f"Sinkhorn Algorithm returns nan/inf values.")
+                print("Sinkhorn Algorithm returns nan/inf values.")
             indices = torch.argmax(Q, dim=-1)
 
         x_q = self.embedding(indices).view(x.shape)

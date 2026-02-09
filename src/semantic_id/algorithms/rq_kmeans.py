@@ -94,12 +94,12 @@ class RQKMeans(BaseSemanticEncoder):
         if self.verbose:
             level_iter = tqdm(level_iter, desc="RQ-KMeans fit (CPU)", unit="level")
 
-        for l in level_iter:
-            n_clusters_l = self.n_clusters[l]
+        for lvl in level_iter:
+            n_clusters_l = self.n_clusters[lvl]
 
             if self.verbose and not isinstance(level_iter, tqdm):
                 print(
-                    f"Training level {l+1}/{self.n_levels} (K={n_clusters_l}) on CPU..."
+                    f"Training level {lvl+1}/{self.n_levels} (K={n_clusters_l}) on CPU..."
                 )
 
             # Determine seed for this level
@@ -107,7 +107,7 @@ class RQKMeans(BaseSemanticEncoder):
             level_seed = None
             if self.random_state is not None:
                 level_seed = int(
-                    np.random.RandomState(self.random_state + l).randint(0, 2**31 - 1)
+                    np.random.RandomState(self.random_state + lvl).randint(0, 2**31 - 1)
                 )
 
             # Determine n_init
@@ -207,15 +207,15 @@ class RQKMeans(BaseSemanticEncoder):
 
             residuals = batch_X.copy()
 
-            for l in range(self.n_levels):
-                codebook = self.codebooks_[l]  # (K_l, D)
+            for lvl in range(self.n_levels):
+                codebook = self.codebooks_[lvl]  # (K_l, D)
 
                 # Find nearest centroid for each residual
                 # We use euclidean distance
                 dists = euclidean_distances(residuals, codebook, squared=True)
                 batch_codes = np.argmin(dists, axis=1)  # (B,)
 
-                codes[start_idx:end_idx, l] = batch_codes
+                codes[start_idx:end_idx, lvl] = batch_codes
 
                 # Update residuals
                 residuals = residuals - codebook[batch_codes]
@@ -257,9 +257,9 @@ class RQKMeans(BaseSemanticEncoder):
 
         vectors_approx = np.zeros((N, self.D_), dtype=np.float32)
 
-        for l in range(L):
-            codebook = self.codebooks_[l]
-            level_codes = codes[:, l]
+        for lvl in range(L):
+            codebook = self.codebooks_[lvl]
+            level_codes = codes[:, lvl]
             vectors_approx += codebook[level_codes]
 
         return vectors_approx

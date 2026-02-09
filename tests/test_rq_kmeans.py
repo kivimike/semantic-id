@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pytest
 
@@ -56,7 +54,7 @@ def test_save_load(tmp_path):
 
 def test_constrained_kmeans():
     try:
-        import k_means_constrained
+        import k_means_constrained  # noqa: F401
     except ImportError:
         pytest.skip("k-means-constrained not installed")
 

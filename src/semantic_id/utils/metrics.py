@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, Optional
 
 import numpy as np
 from sklearn.neighbors import NearestNeighbors

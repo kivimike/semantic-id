@@ -2,11 +2,10 @@
 
 import numpy as np
 import pytest
-import torch
 
 from semantic_id.algorithms.rq_vae import RQVAE
 from semantic_id.engine import SemanticIdEngine
-from semantic_id.uniqueness.resolver import SinkhornResolver, UniqueIdResolver
+from semantic_id.uniqueness.resolver import SinkhornResolver
 
 
 def test_sinkhorn_resolver_requires_kwargs():

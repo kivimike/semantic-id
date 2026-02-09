@@ -2,7 +2,6 @@ from typing import List, Literal, Optional, Union
 
 import numpy as np
 import torch
-from sklearn.cluster import KMeans
 from tqdm import tqdm
 
 from semantic_id.utils.clustering import (
@@ -76,14 +75,14 @@ class RQKMeansTorch:
                 level_iter, desc=f"RQ-KMeans fit ({self.device})", unit="level"
             )
 
-        for l in level_iter:
-            K = self.n_clusters[l]
+        for lvl in level_iter:
+            K = self.n_clusters[lvl]
 
             # Seed handling - match CPU backend's seed generation for reproducibility
             seed = None
             if self.random_state is not None:
                 seed = int(
-                    np.random.RandomState(self.random_state + l).randint(0, 2**31 - 1)
+                    np.random.RandomState(self.random_state + lvl).randint(0, 2**31 - 1)
                 )
 
             centers = None
@@ -183,8 +182,8 @@ class RQKMeansTorch:
 
             residuals = batch_X.clone()  # We modify residuals
 
-            for l in range(self.n_levels):
-                codebook = self.codebooks_[l]  # (K, D) on device
+            for lvl in range(self.n_levels):
+                codebook = self.codebooks_[lvl]  # (K, D) on device
 
                 # Compute distances (B, K)
                 # dist = ||x - c||^2
@@ -197,7 +196,7 @@ class RQKMeansTorch:
                 batch_codes = torch.argmin(dists, dim=1)  # (B,)
 
                 # Store codes (move to CPU)
-                codes[start_idx:end_idx, l] = batch_codes.cpu().numpy()
+                codes[start_idx:end_idx, lvl] = batch_codes.cpu().numpy()
 
                 # Update residuals
                 # selected_centers = codebook[batch_codes]

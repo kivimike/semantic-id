@@ -1,4 +1,3 @@
-import collections
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -112,7 +111,6 @@ class SinkhornResolver(BaseResolver):
 
         embeddings = kwargs.get("embeddings")
         model = kwargs.get("model")
-        device = kwargs.get("device", "cpu")
         sep = kwargs.get("sep", "-")
 
         if embeddings is None or model is None:
@@ -120,8 +118,6 @@ class SinkhornResolver(BaseResolver):
                 "SinkhornResolver.assign() requires 'embeddings' and 'model' kwargs. "
                 "Use SemanticIdEngine with an RQVAE encoder for Sinkhorn resolution."
             )
-
-        N = len(semantic_ids)
 
         # Convert to mutable arrays for in-place updates
         all_ids = list(semantic_ids)

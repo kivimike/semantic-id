@@ -1,7 +1,4 @@
-import os
-
 import numpy as np
-import pytest
 import torch
 
 from semantic_id.algorithms.rq_kmeans import RQKMeans
@@ -15,18 +12,6 @@ def test_kmeans_plus_plus_initialization():
     K = 5
     # Create distinct points
     X = torch.rand(N, D)
-
-    model = RQKMeansTorch(
-        n_levels=1,
-        n_clusters=[K],
-        metric="l2",
-        implementation="kmeans",
-        max_iter=10,
-        tol=1e-4,
-        random_state=42,
-        verbose=False,
-        device="cpu",
-    )
 
     # Test initialization
     centroids = _initialize_centroids_kmeans_plus_plus(X, K, seed=42)
@@ -64,18 +49,6 @@ def test_kmeans_plus_plus_determinism():
     N, D = 100, 4
     K = 5
     X = torch.rand(N, D)
-
-    model = RQKMeansTorch(
-        n_levels=1,
-        n_clusters=[K],
-        metric="l2",
-        implementation="kmeans",
-        max_iter=10,
-        tol=1e-4,
-        random_state=42,
-        verbose=False,
-        device="cpu",
-    )
 
     c1 = _initialize_centroids_kmeans_plus_plus(X, K, seed=42)
     c2 = _initialize_centroids_kmeans_plus_plus(X, K, seed=42)
@@ -159,9 +132,9 @@ def test_torch_backend_vs_numpy_backend_consistency():
     # codebooks are in model_torch.codebooks_
 
     rec = torch.zeros_like(torch.from_numpy(X))
-    for l in range(2):
-        codebook = model_torch.codebooks_[l].cpu()  # (K, D)
-        codes_l = codes_torch[:, l]  # (N,)
+    for lvl in range(2):
+        codebook = model_torch.codebooks_[lvl].cpu()  # (K, D)
+        codes_l = codes_torch[:, lvl]  # (N,)
         rec += codebook[codes_l]
 
     mse = torch.mean((torch.from_numpy(X) - rec) ** 2).item()

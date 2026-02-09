@@ -1,12 +1,11 @@
 """Tests for SemanticIdEngine save/load functionality."""
 
 import numpy as np
-import pytest
 
 from semantic_id.algorithms.rq_kmeans import RQKMeans
 from semantic_id.engine import SemanticIdEngine
 from semantic_id.uniqueness.resolver import UniqueIdResolver
-from semantic_id.uniqueness.stores import InMemoryCollisionStore, SQLiteCollisionStore
+from semantic_id.uniqueness.stores import SQLiteCollisionStore
 
 
 def test_engine_basic_flow():
@@ -33,7 +32,7 @@ def test_engine_save_load_in_memory(tmp_path):
     engine = SemanticIdEngine(encoder=encoder)
     engine.fit(X)
 
-    uids_before = engine.unique_ids(X)
+    engine.unique_ids(X)
 
     save_path = str(tmp_path / "engine_test")
     engine.save(save_path)

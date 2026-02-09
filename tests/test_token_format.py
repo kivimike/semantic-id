@@ -1,7 +1,6 @@
 """Tests for token-format semantic IDs."""
 
 import numpy as np
-import pytest
 
 from semantic_id.algorithms.rq_kmeans import RQKMeans
 from semantic_id.core import codes_to_ids
