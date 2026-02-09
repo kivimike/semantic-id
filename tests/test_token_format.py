@@ -1,4 +1,5 @@
 """Tests for token-format semantic IDs."""
+
 import numpy as np
 import pytest
 

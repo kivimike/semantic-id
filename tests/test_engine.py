@@ -1,4 +1,5 @@
 """Tests for SemanticIdEngine save/load functionality."""
+
 import numpy as np
 import pytest
 
@@ -86,6 +87,7 @@ def test_engine_meta_file_contents(tmp_path):
     engine.save(save_path)
 
     import os
+
     meta_path = os.path.join(save_path, "engine_meta.json")
     assert os.path.exists(meta_path)
 

@@ -1,4 +1,5 @@
 """Tests for RQVAE training features: LR scheduler, checkpointing, history."""
+
 import numpy as np
 import pytest
 

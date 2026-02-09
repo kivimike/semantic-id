@@ -5,32 +5,37 @@ from typing import List, Optional
 
 from semantic_id.algorithms.rq_vae_modules import MLPLayers, ResidualVectorQuantizer
 
+
 class RQVAEModule(nn.Module):
     """
     Residual Quantization Variational AutoEncoder (RQ-VAE).
     Encodes input vectors into discrete codes using Residual Vector Quantization.
-    
+
     Reference: reference/rq/models/rqvae.py
     """
-    def __init__(self,
-                 in_dim: int = 768,
-                 num_emb_list: Optional[List[int]] = None,
-                 e_dim: int = 64,
-                 layers: Optional[List[int]] = None,
-                 dropout_prob: float = 0.0,
-                 bn: bool = False,
-                 loss_type: str = "mse",
-                 quant_loss_weight: float = 1.0,
-                 beta: float = 0.25,
-                 kmeans_init: bool = False,
-                 kmeans_iters: int = 100,
-                 sk_epsilons: Optional[List[float]] = None,
-                 sk_iters: int = 100,
-        ):
+
+    def __init__(
+        self,
+        in_dim: int = 768,
+        num_emb_list: Optional[List[int]] = None,
+        e_dim: int = 64,
+        layers: Optional[List[int]] = None,
+        dropout_prob: float = 0.0,
+        bn: bool = False,
+        loss_type: str = "mse",
+        quant_loss_weight: float = 1.0,
+        beta: float = 0.25,
+        kmeans_init: bool = False,
+        kmeans_iters: int = 100,
+        sk_epsilons: Optional[List[float]] = None,
+        sk_iters: int = 100,
+    ):
         super(RQVAEModule, self).__init__()
 
         self.in_dim = in_dim
-        self.num_emb_list = num_emb_list if num_emb_list is not None else [256, 256, 256, 256]
+        self.num_emb_list = (
+            num_emb_list if num_emb_list is not None else [256, 256, 256, 256]
+        )
         self.e_dim = e_dim
 
         self.layers = layers if layers is not None else [512, 256, 128]
@@ -47,9 +52,7 @@ class RQVAEModule(nn.Module):
         # Encoder Architecture
         self.encode_layer_dims = [self.in_dim] + self.layers + [self.e_dim]
         self.encoder = MLPLayers(
-            layers=self.encode_layer_dims,
-            dropout=self.dropout_prob,
-            bn=self.bn
+            layers=self.encode_layer_dims, dropout=self.dropout_prob, bn=self.bn
         )
 
         # Residual Quantizer
@@ -66,19 +69,17 @@ class RQVAEModule(nn.Module):
         # Decoder Architecture (Symmetric to Encoder)
         self.decode_layer_dims = self.encode_layer_dims[::-1]
         self.decoder = MLPLayers(
-            layers=self.decode_layer_dims,
-            dropout=self.dropout_prob,
-            bn=self.bn
+            layers=self.decode_layer_dims, dropout=self.dropout_prob, bn=self.bn
         )
 
     def forward(self, x, use_sk=True):
         """
         Forward pass through the VAE.
-        
+
         Args:
             x: Input tensor (B, D).
             use_sk: Whether to use Sinkhorn algorithm in quantization.
-            
+
         Returns:
             out: Reconstructed input.
             rq_loss: Quantization loss.
@@ -103,12 +104,12 @@ class RQVAEModule(nn.Module):
         """
         Compute total loss (Reconstruction + Quantization).
         """
-        if self.loss_type == 'mse':
-            loss_recon = F.mse_loss(out, xs, reduction='mean')
-        elif self.loss_type == 'l1':
-            loss_recon = F.l1_loss(out, xs, reduction='mean')
+        if self.loss_type == "mse":
+            loss_recon = F.mse_loss(out, xs, reduction="mean")
+        elif self.loss_type == "l1":
+            loss_recon = F.l1_loss(out, xs, reduction="mean")
         else:
-            raise ValueError('incompatible loss type')
+            raise ValueError("incompatible loss type")
 
         loss_total = loss_recon + self.quant_loss_weight * quant_loss
 

@@ -17,21 +17,21 @@ def codes_to_ids(
 ) -> List[str]:
     """
     Convert a (N, L) array of integer codes to string IDs.
-    
+
     Args:
         codes: Discrete codes of shape (N, L).
         sep: Separator string (only used for ``fmt="plain"``).
         fmt: Output format.
-        
+
             - ``"plain"``: ``"3-9-1"`` (codes joined by *sep*)
             - ``"token"``: ``"<a_3><b_9><c_1>"`` (LLM-friendly token format)
-    
+
     Returns:
         List of semantic ID strings.
     """
     N, L = codes.shape
     result: List[str] = []
-    
+
     if fmt == "token":
         for i in range(N):
             parts = []
@@ -42,7 +42,7 @@ def codes_to_ids(
     else:
         for i in range(N):
             result.append(sep.join(str(c) for c in codes[i]))
-    
+
     return result
 
 
@@ -66,7 +66,9 @@ class BaseSemanticEncoder(ABC):
         pass
 
     @abstractmethod
-    def encode(self, X: ArrayLike, *, device: str = "cpu", batch_size: Optional[int] = None) -> np.ndarray:
+    def encode(
+        self, X: ArrayLike, *, device: str = "cpu", batch_size: Optional[int] = None
+    ) -> np.ndarray:
         """
         Encode embeddings X into discrete codes.
 

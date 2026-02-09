@@ -1,4 +1,5 @@
 """Tests for SinkhornResolver collision resolution."""
+
 import numpy as np
 import pytest
 import torch
