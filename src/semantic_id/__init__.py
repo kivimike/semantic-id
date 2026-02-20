@@ -3,7 +3,12 @@ from semantic_id.algorithms.rq_vae import RQVAE
 from semantic_id.engine import SemanticIdEngine
 from semantic_id.uniqueness.resolver import SinkhornResolver, UniqueIdResolver
 from semantic_id.uniqueness.stores import InMemoryCollisionStore, SQLiteCollisionStore
-from semantic_id.utils.metrics import evaluate
+from semantic_id.utils.metrics import (
+    evaluate,
+    find_similar,
+    hierarchical_distance,
+    ndcg_at_k,
+)
 
 __version__ = "0.2.3"
 
@@ -17,4 +22,7 @@ __all__ = [
     "InMemoryCollisionStore",
     "SQLiteCollisionStore",
     "evaluate",
+    "find_similar",
+    "hierarchical_distance",
+    "ndcg_at_k",
 ]

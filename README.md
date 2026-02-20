@@ -27,7 +27,8 @@ Before you start clustering, it's super helpful to "see" your data. We love **[A
 *   **RQ-VAE**: Neural network-based quantization with learnable codebooks.
 *   **Balanced Clustering**: Constrained K-Means for evenly distributed codes.
 *   **Uniqueness**: Automatic collision resolution (suffix-based and Sinkhorn re-encoding).
-*   **Evaluation**: Built-in metrics — collision rate, recall@K, distance correlation, quantization MSE.
+*   **Custom Formats**: User-defined formatter callbacks for any ID format, plus custom item IDs for collision resolution.
+*   **Evaluation**: Built-in metrics — collision rate, recall@K, NDCG@K, distance correlation, code utilization, entropy, quantization MSE.
 *   **LLM-Friendly Tokens**: Output IDs in `<a_3><b_9><c_1>` format for language models.
 *   **Persistence**: Save/Load models and full engine pipelines.
 
@@ -151,8 +152,12 @@ print(metrics)
 #   'n_samples': 100,
 #   'n_unique_codes': 87,
 #   'collision_rate': 0.13,
+#   'collision_rate_per_level': [0.9, 0.45, 0.13],
 #   'recall_at_10': 0.42,
+#   'ndcg_at_10': 0.38,
 #   'distance_correlation': 0.65,
+#   'code_utilization_per_level': [1.0, 0.95, 0.87],
+#   'code_entropy_per_level': [2.30, 2.25, 2.10],
 #   'quantization_mse': 0.003
 # }
 ```
@@ -160,8 +165,12 @@ print(metrics)
 | Metric | What it measures |
 |---|---|
 | `collision_rate` | Fraction of items sharing an ID with another item (lower is better) |
+| `collision_rate_per_level` | Collision rate at each prefix depth — shows where uniqueness breaks down |
 | `recall_at_10` | How well code-space neighbors match embedding-space neighbors (higher is better) |
-| `distance_correlation` | Spearman correlation between embedding distances and code Hamming distances (higher is better) |
+| `ndcg_at_10` | Ranking quality of code-space neighbors vs embedding-space (higher is better) |
+| `distance_correlation` | Spearman correlation between embedding distances and code distances (higher is better) |
+| `code_utilization_per_level` | Fraction of codebook entries used at each level (higher is better) |
+| `code_entropy_per_level` | Shannon entropy of code distribution per level (higher = more uniform) |
 | `quantization_mse` | Reconstruction error from `decode()` (lower is better; requires an encoder with `decode()`) |
 
 ### 6. LLM-Friendly Token Format 🤖
@@ -178,7 +187,39 @@ plain_ids = model.semantic_id(codes)               # ["3-9-1", "0-5-7", ...]
 token_ids = model.semantic_id(codes, fmt="token")   # ["<a_3><b_9><c_1>", ...]
 ```
 
-### 7. Balanced Clustering ⚖️
+### 7. Custom ID Formats 🎨
+
+Define your own format function for full control over how codes become strings:
+
+```python
+# Custom format for your LLM
+def my_llm_format(codes):
+    return "".join(f"[item_L{i}_{c}]" for i, c in enumerate(codes))
+
+ids = model.semantic_id(codes, formatter=my_llm_format)
+# ["[item_L0_3][item_L1_9][item_L2_1]", ...]
+
+# Works through the engine too
+engine = SemanticIdEngine(encoder=model)
+engine.fit(X)
+uids = engine.unique_ids(X, formatter=my_llm_format)
+```
+
+### 8. Use Your Own Item IDs 🏷️
+
+Instead of auto-incremented suffixes (`-1`, `-2`), attach your own identifiers:
+
+```python
+db_keys = ["SKU001", "SKU002", "SKU003", ...]
+uids = engine.unique_ids(X, item_ids=db_keys)
+# Collisions become "3-9-1-SKU042" instead of "3-9-1-1"
+
+# Custom separator for the suffix too
+uids = engine.unique_ids(X, item_ids=db_keys, sep="/")
+# "3/9/1/SKU042"
+```
+
+### 9. Balanced Clustering ⚖️
 
 Use `implementation="constrained"` to enforce roughly equal cluster sizes. This reduces collision rates but requires the `k-means-constrained` package.
 
@@ -222,6 +263,7 @@ We are actively building! Here is what's ready for you today:
 -   ✅ **RQ-VAE**: Neural network based quantization with training history tracking.
 -   ✅ **Balanced Clustering**: Constrained K-Means for even code distribution.
 -   ✅ **Uniqueness**: Suffix-based and Sinkhorn-based collision resolution.
--   ✅ **Evaluation**: Built-in metrics for quality assessment.
+-   ✅ **Custom Formats**: User-defined formatter callbacks and item IDs for collision resolution.
+-   ✅ **Evaluation**: Comprehensive metrics including NDCG, code utilization, entropy, and hierarchical distance.
 -   ✅ **Token Format**: LLM-friendly ID output.
 -   ✅ **Persistence**: Save/Load models and engines.

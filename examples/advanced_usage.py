@@ -7,12 +7,14 @@ This script demonstrates:
 3.  Assembling the full SemanticIdEngine pipeline.
 4.  Step-by-step breakdown of what happens inside the engine.
 5.  Token format for LLM-friendly IDs.
-6.  Evaluating ID quality with built-in metrics.
-7.  Decoding (reconstruction) from codes back to vectors.
-8.  Save / Load for reproducibility.
-9.  RQ-VAE with training history and learning rate scheduling.
-10. SinkhornResolver for semantically-aware collision resolution.
-11. Batch encoding for large datasets.
+6.  Custom formatter callback for user-defined ID formats.
+7.  Evaluating ID quality with built-in metrics.
+8.  Decoding (reconstruction) from codes back to vectors.
+9.  Save / Load for reproducibility.
+10. RQ-VAE with training history and learning rate scheduling.
+11. SinkhornResolver for semantically-aware collision resolution.
+12. Batch encoding for large datasets.
+13. Custom item IDs for collision resolution.
 """
 
 import json
@@ -177,6 +179,26 @@ def main():
     # Custom separator for plain format
     custom_ids = model.semantic_id(all_codes, sep="/")
     print(f"Custom sep:    {custom_ids[0]}")  # e.g., "2/0/5"
+
+    # ==========================================
+    # 4b. Custom Formatter Callback
+    # ==========================================
+
+    print("\n" + "=" * 60)
+    print("--- 7b. Custom Formatter ---")
+    print("=" * 60)
+
+    # Define any format you need for your LLM or system
+    def my_llm_format(codes):
+        return "".join(f"[item_L{i}_{c}]" for i, c in enumerate(codes))
+
+    custom_fmt_ids = model.semantic_id(all_codes, formatter=my_llm_format)
+    print(f"Custom LLM:    {custom_fmt_ids[0]}")  # e.g., "[item_L0_2][item_L1_0][item_L2_5]"
+
+    # The formatter also works through the engine
+    engine_custom = SemanticIdEngine(encoder=model)
+    engine_custom_ids = engine_custom.unique_ids(X[:10], formatter=my_llm_format)
+    print(f"Engine custom: {engine_custom_ids[0]}")
 
     # ==========================================
     # 5. Evaluate ID Quality
@@ -367,6 +389,28 @@ def main():
     # RQ-VAE with batch encoding
     vae_codes_batched = rqvae.encode(large_X, batch_size=512)
     print(f"VAE batch-encoded {len(large_X)} vectors -> codes shape: {vae_codes_batched.shape}")
+
+    # ==========================================
+    # 11. Custom Item IDs for Collision Resolution
+    # ==========================================
+
+    print("\n" + "=" * 60)
+    print("--- 14. Custom Item IDs ---")
+    print("=" * 60)
+
+    # Instead of auto-incremented suffixes (-1, -2, ...),
+    # use your own item identifiers (e.g., database primary keys).
+    item_engine = SemanticIdEngine(encoder=model)
+    item_engine.fit(X)
+
+    db_keys = [f"SKU{i:04d}" for i in range(len(X))]
+    item_uids = item_engine.unique_ids(X, item_ids=db_keys)
+    print(f"Sample IDs with item keys: {item_uids[:5]}")
+    # Colliding items get e.g., "2-0-5-SKU0042" instead of "2-0-5-1"
+
+    # You can also combine custom separator with item IDs
+    item_uids_slash = item_engine.unique_ids(X, item_ids=db_keys, sep="/")
+    print(f"With custom sep:           {item_uids_slash[:5]}")
 
     # Cleanup
     for artifact in ["my_store.json", "saved_model", "saved_engine", "engine_collisions.db"]:

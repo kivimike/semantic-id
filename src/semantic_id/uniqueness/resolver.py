@@ -30,6 +30,9 @@ class UniqueIdResolver(BaseResolver):
     First occurrence: no suffix.
     Second occurrence: ``-1``.
     Third occurrence: ``-2``, etc.
+
+    When *item_ids* are provided via ``assign()``, the item's own
+    identifier is appended instead of an auto-incremented counter.
     """
 
     def __init__(self, store: Optional[CollisionStore] = None):
@@ -44,18 +47,29 @@ class UniqueIdResolver(BaseResolver):
 
         Args:
             semantic_ids: List of raw semantic ID strings.
+            item_ids: Optional list of external identifiers (e.g. database
+                primary keys).  When provided, collisions are resolved by
+                appending the item's own ID instead of an auto-incremented
+                counter: ``"3-9-1-SKU123"`` instead of ``"3-9-1-1"``.
+            sep: Separator between the base ID and the suffix (default
+                ``"-"``).
 
         Returns:
             List of unique IDs (potentially with suffixes).
         """
+        item_ids: Optional[List[str]] = kwargs.get("item_ids")
+        sep: str = kwargs.get("sep", "-")
+
         unique_ids = []
-        for sid in semantic_ids:
+        for i, sid in enumerate(semantic_ids):
             idx = self.store.next_suffix(sid)
 
             if idx == 0:
                 unique_ids.append(sid)
+            elif item_ids is not None:
+                unique_ids.append(f"{sid}{sep}{item_ids[i]}")
             else:
-                unique_ids.append(f"{sid}-{idx}")
+                unique_ids.append(f"{sid}{sep}{idx}")
 
         return unique_ids
 
@@ -169,13 +183,16 @@ class SinkhornResolver(BaseResolver):
         # Fallback: if still collisions, use suffix resolution
         if self.fallback_suffix:
             suffix_store = InMemoryCollisionStore()
+            item_ids: Optional[List[str]] = kwargs.get("item_ids")
             final_ids = []
-            for sid in all_ids:
+            for i, sid in enumerate(all_ids):
                 idx = suffix_store.next_suffix(sid)
                 if idx == 0:
                     final_ids.append(sid)
+                elif item_ids is not None:
+                    final_ids.append(f"{sid}{sep}{item_ids[i]}")
                 else:
-                    final_ids.append(f"{sid}-{idx}")
+                    final_ids.append(f"{sid}{sep}{idx}")
             return final_ids
 
         return all_ids

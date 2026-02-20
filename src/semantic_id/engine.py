@@ -1,7 +1,7 @@
 import json
 import os
 import shutil
-from typing import List, Optional
+from typing import Callable, List, Literal, Optional
 
 import numpy as np
 
@@ -56,7 +56,15 @@ class SemanticIdEngine:
         return self
 
     def unique_ids(
-        self, X: ArrayLike, *, device: str = "cpu", batch_size: Optional[int] = None
+        self,
+        X: ArrayLike,
+        *,
+        device: str = "cpu",
+        batch_size: Optional[int] = None,
+        sep: str = "-",
+        fmt: Literal["plain", "token"] = "plain",
+        formatter: Optional[Callable[[np.ndarray], str]] = None,
+        item_ids: Optional[List[str]] = None,
     ) -> List[str]:
         """
         Generate unique semantic IDs for the input embeddings.
@@ -64,6 +72,19 @@ class SemanticIdEngine:
         1. Encode X -> codes
         2. Convert codes -> semantic_ids (raw)
         3. Resolve collisions -> unique_ids
+
+        Args:
+            X: Input embeddings.
+            device: Computation device.
+            batch_size: Batch size for encoding.
+            sep: Separator for plain format IDs (also used for collision
+                suffixes).
+            fmt: ID format (``"plain"`` or ``"token"``).
+            formatter: Custom callable for formatting code rows into
+                strings.  Overrides *sep* and *fmt*.
+            item_ids: Optional list of external identifiers.  When
+                provided, collisions are resolved by appending the item's
+                own ID instead of an auto-incremented counter.
         """
         import torch
 
@@ -71,18 +92,19 @@ class SemanticIdEngine:
         codes = self.encoder.encode(X, device=device, batch_size=batch_size)
 
         # 2. Semantic IDs
-        sids = self.encoder.semantic_id(codes)
+        sids = self.encoder.semantic_id(codes, sep=sep, fmt=fmt, formatter=formatter)
 
         # 3. Unique IDs -- pass extra context for SinkhornResolver
-        resolver_kwargs = {}
+        resolver_kwargs: dict = {"sep": sep}
+        if item_ids is not None:
+            resolver_kwargs["item_ids"] = item_ids
+
         if isinstance(self.unique_resolver, SinkhornResolver):
-            # SinkhornResolver needs the raw embeddings and model on device
             if isinstance(X, np.ndarray):
                 emb_tensor = torch.from_numpy(X).float().to(device)
             else:
                 emb_tensor = torch.tensor(X, dtype=torch.float).to(device)
 
-            # Access the underlying module (RQVAE exposes .module)
             model = getattr(self.encoder, "module", None)
             if model is not None:
                 model.to(device)

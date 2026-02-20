@@ -8,6 +8,22 @@ from semantic_id.algorithms.rq_kmeans_plus import (
 from semantic_id.algorithms.rq_vae import RQVAE
 
 
+def test_rq_vae_single_sample():
+    X = np.random.randn(1, 16).astype(np.float32)
+    model = RQVAE(
+        in_dim=16,
+        num_emb_list=[4, 4],
+        e_dim=8,
+        layers=[16],
+        epochs=1,
+        batch_size=1,
+        device="cpu",
+    )
+    model.fit(X)
+    codes = model.encode(X)
+    assert codes.shape == (1, 2)
+
+
 def test_rq_vae_initialization():
     in_dim = 32
     model = RQVAE(
@@ -67,6 +83,31 @@ def test_rq_vae_save_load(tmp_path):
 
     np.testing.assert_array_equal(codes_orig, codes_loaded)
     assert loaded_model.in_dim == model.in_dim
+
+
+def test_rq_vae_decode_round_trip():
+    N, D = 30, 16
+    X = np.random.randn(N, D).astype(np.float32)
+
+    model = RQVAE(
+        in_dim=D,
+        num_emb_list=[8, 8],
+        e_dim=16,
+        layers=[32, 16],
+        batch_size=10,
+        epochs=5,
+        lr=1e-3,
+        device="cpu",
+    )
+    model.fit(X)
+
+    codes = model.encode(X)
+    X_hat = model.decode(codes)
+
+    assert X_hat.shape == X.shape
+    assert X_hat.dtype == np.float32
+    mse = np.mean((X - X_hat) ** 2)
+    assert np.isfinite(mse) and mse >= 0
 
 
 def test_rq_kmeans_plus_strategy(tmp_path):

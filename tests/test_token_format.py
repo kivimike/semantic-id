@@ -52,6 +52,38 @@ def test_semantic_id_token_via_encoder():
     assert len(ids_token) == N
 
 
+def test_custom_formatter_callback():
+    codes = np.array([[3, 9, 1], [0, 5, 2]], dtype=np.int32)
+
+    def my_format(row):
+        return "/".join(f"level{i}={c}" for i, c in enumerate(row))
+
+    result = codes_to_ids(codes, formatter=my_format)
+    assert result == ["level0=3/level1=9/level2=1", "level0=0/level1=5/level2=2"]
+
+
+def test_custom_formatter_via_encoder():
+    N, D = 10, 8
+    X = np.random.randn(N, D).astype(np.float32)
+
+    model = RQKMeans(n_levels=2, n_clusters=5, random_state=42)
+    model.fit(X)
+    codes = model.encode(X)
+
+    def bracket_format(row):
+        return "".join(f"[item_L{i}_{c}]" for i, c in enumerate(row))
+
+    ids = model.semantic_id(codes, formatter=bracket_format)
+    assert all(sid.startswith("[item_L0_") for sid in ids)
+    assert len(ids) == N
+
+
+def test_custom_formatter_overrides_fmt_and_sep():
+    codes = np.array([[1, 2]], dtype=np.int32)
+    result = codes_to_ids(codes, sep="XXX", fmt="token", formatter=lambda r: "custom")
+    assert result == ["custom"]
+
+
 def test_token_format_many_levels():
     """Token format with more levels than alphabet letters should wrap."""
     codes = np.zeros((1, 28), dtype=np.int32)

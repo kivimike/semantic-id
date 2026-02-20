@@ -1,6 +1,6 @@
 import string
 from abc import ABC, abstractmethod
-from typing import Dict, List, Literal, Optional, Union
+from typing import Callable, Dict, List, Literal, Optional, Union
 
 import numpy as np
 
@@ -15,6 +15,7 @@ def codes_to_ids(
     *,
     sep: str = "-",
     fmt: Literal["plain", "token"] = "plain",
+    formatter: Optional[Callable[[np.ndarray], str]] = None,
 ) -> List[str]:
     """
     Convert a (N, L) array of integer codes to string IDs.
@@ -27,13 +28,20 @@ def codes_to_ids(
             - ``"plain"``: ``"3-9-1"`` (codes joined by *sep*)
             - ``"token"``: ``"<a_3><b_9><c_1>"`` (LLM-friendly token format)
 
+        formatter: Optional callable that receives a single code row
+            ``(L,)`` and returns a string.  When provided, *sep* and
+            *fmt* are ignored.
+
     Returns:
         List of semantic ID strings.
     """
     N, L = codes.shape
     result: List[str] = []
 
-    if fmt == "token":
+    if formatter is not None:
+        for i in range(N):
+            result.append(formatter(codes[i]))
+    elif fmt == "token":
         for i in range(N):
             parts = []
             for level in range(L):
@@ -89,6 +97,7 @@ class BaseSemanticEncoder(ABC):
         *,
         sep: str = "-",
         fmt: Literal["plain", "token"] = "plain",
+        formatter: Optional[Callable[[np.ndarray], str]] = None,
     ) -> List[str]:
         """
         Convert discrete codes into string semantic IDs.
@@ -98,11 +107,13 @@ class BaseSemanticEncoder(ABC):
             sep: Separator string (used when ``fmt="plain"``).
             fmt: Output format — ``"plain"`` for ``"3-9-1"`` or
                 ``"token"`` for ``"<a_3><b_9><c_1>"``.
+            formatter: Optional callable that receives a single code row
+                ``(L,)`` and returns a string.  Overrides *sep* and *fmt*.
 
         Returns:
             List of semantic ID strings.
         """
-        return codes_to_ids(codes, sep=sep, fmt=fmt)
+        return codes_to_ids(codes, sep=sep, fmt=fmt, formatter=formatter)
 
     @abstractmethod
     def save(self, path: str) -> None:

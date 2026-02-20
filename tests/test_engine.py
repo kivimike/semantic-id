@@ -72,6 +72,62 @@ def test_engine_save_load_sqlite(tmp_path):
     assert isinstance(loaded_engine.unique_resolver.store, SQLiteCollisionStore)
 
 
+def test_engine_unique_ids_with_token_format():
+    N, D = 20, 8
+    X = np.random.randn(N, D).astype(np.float32)
+
+    encoder = RQKMeans(n_levels=2, n_clusters=5, random_state=42)
+    engine = SemanticIdEngine(encoder=encoder)
+    engine.fit(X)
+
+    uids = engine.unique_ids(X, fmt="token")
+    assert all("<a_" in uid for uid in uids)
+
+
+def test_engine_unique_ids_with_custom_sep():
+    N, D = 20, 8
+    X = np.random.randn(N, D).astype(np.float32)
+
+    encoder = RQKMeans(n_levels=2, n_clusters=5, random_state=42)
+    engine = SemanticIdEngine(encoder=encoder)
+    engine.fit(X)
+
+    uids = engine.unique_ids(X, sep="/")
+    # Non-colliding IDs should use "/" as separator
+    assert any("/" in uid for uid in uids)
+
+
+def test_engine_unique_ids_with_formatter():
+    N, D = 20, 8
+    X = np.random.randn(N, D).astype(np.float32)
+
+    encoder = RQKMeans(n_levels=2, n_clusters=5, random_state=42)
+    engine = SemanticIdEngine(encoder=encoder)
+    engine.fit(X)
+
+    uids = engine.unique_ids(X, formatter=lambda row: "::".join(str(c) for c in row))
+    assert all("::" in uid for uid in uids)
+
+
+def test_engine_unique_ids_with_item_ids():
+    N, D = 30, 8
+    X = np.random.randn(N, D).astype(np.float32)
+
+    encoder = RQKMeans(n_levels=2, n_clusters=3, random_state=42)
+    engine = SemanticIdEngine(encoder=encoder)
+    engine.fit(X)
+
+    item_ids = [f"item_{i}" for i in range(N)]
+    uids = engine.unique_ids(X, item_ids=item_ids)
+
+    assert len(uids) == N
+    # Any collisions should use item_ids instead of numeric suffixes
+    for uid in uids:
+        parts = uid.split("-")
+        if len(parts) > 2:
+            assert parts[-1].startswith("item_")
+
+
 def test_engine_meta_file_contents(tmp_path):
     """Verify engine_meta.json contains expected fields."""
     import json
