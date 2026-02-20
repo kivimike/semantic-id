@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Literal, Optional, Union
 
 import numpy as np
 
-from semantic_id.exceptions import NotFittedError, ShapeMismatchError
+from semantic_id.exceptions import ShapeMismatchError
 
 ArrayLike = Union[np.ndarray, List[List[float]]]
 
