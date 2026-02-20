@@ -1,8 +1,19 @@
+from typing import Optional
+
 import numpy as np
 import pytest
 import torch
 
 from semantic_id.algorithms.rq_kmeans import RQKMeans
+from semantic_id.algorithms.rq_vae import RQVAE
+
+
+def _get_gpu_device() -> Optional[str]:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return None
 
 
 def test_backend_equivalence_encode():
@@ -88,3 +99,69 @@ def test_backend_equivalence_gpu():
     codes_gpu = model_gpu.encode(X, device=device)
 
     np.testing.assert_array_equal(codes_cpu, codes_gpu)
+
+
+@pytest.mark.skipif(_get_gpu_device() is None, reason="No GPU available")
+def test_rqvae_backend_equivalence_gpu_to_cpu():
+    """
+    Train an RQ-VAE on GPU, then verify that encoding on GPU and CPU
+    produces identical discrete codes.
+    """
+    device = _get_gpu_device()
+    assert device is not None
+
+    torch.manual_seed(42)
+    N, D = 50, 16
+    X = np.random.RandomState(0).randn(N, D).astype(np.float32)
+
+    model = RQVAE(
+        in_dim=D,
+        num_emb_list=[8, 8],
+        e_dim=8,
+        layers=[16],
+        batch_size=25,
+        epochs=3,
+        lr=1e-3,
+        device=device,
+    )
+    model.fit(X)
+
+    codes_gpu = model.encode(X, device=device)
+    codes_cpu = model.encode(X, device="cpu")
+
+    np.testing.assert_array_equal(codes_gpu, codes_cpu)
+
+
+@pytest.mark.skipif(_get_gpu_device() is None, reason="No GPU available")
+def test_rqvae_backend_equivalence_save_load_cross_device(tmp_path):
+    """
+    Train an RQ-VAE on GPU, save it, load it back, and encode on CPU.
+    Codes must match the original GPU encoding.
+    """
+    device = _get_gpu_device()
+    assert device is not None
+
+    torch.manual_seed(42)
+    N, D = 50, 16
+    X = np.random.RandomState(0).randn(N, D).astype(np.float32)
+
+    model = RQVAE(
+        in_dim=D,
+        num_emb_list=[8, 8],
+        e_dim=8,
+        layers=[16],
+        batch_size=25,
+        epochs=3,
+        lr=1e-3,
+        device=device,
+    )
+    model.fit(X)
+    codes_gpu = model.encode(X, device=device)
+
+    save_path = tmp_path / "rqvae_cross_device"
+    model.save(str(save_path))
+
+    loaded_model = RQVAE.load(str(save_path))
+    codes_cpu = loaded_model.encode(X, device="cpu")
+
+    np.testing.assert_array_equal(codes_gpu, codes_cpu)
