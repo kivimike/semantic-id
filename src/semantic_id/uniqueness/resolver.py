@@ -1,16 +1,18 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 
 from semantic_id.uniqueness.stores import CollisionStore, InMemoryCollisionStore
+
+_DEFAULT_SK_EPSILON = 0.003
 
 
 class BaseResolver(ABC):
     """Abstract base class for collision resolvers."""
 
     @abstractmethod
-    def assign(self, semantic_ids: List[str], **kwargs) -> List[str]:
+    def assign(self, semantic_ids: List[str], **kwargs: Any) -> List[str]:
         """
         Resolve collisions in a list of semantic IDs.
 
@@ -35,13 +37,14 @@ class UniqueIdResolver(BaseResolver):
     identifier is appended instead of an auto-incremented counter.
     """
 
-    def __init__(self, store: Optional[CollisionStore] = None):
+    def __init__(self, store: Optional[CollisionStore] = None) -> None:
+        self.store: CollisionStore
         if store is None:
             self.store = InMemoryCollisionStore()
         else:
             self.store = store
 
-    def assign(self, semantic_ids: List[str], **kwargs) -> List[str]:
+    def assign(self, semantic_ids: List[str], **kwargs: Any) -> List[str]:
         """
         Assign unique IDs for a list of semantic IDs.
 
@@ -102,10 +105,10 @@ class SinkhornResolver(BaseResolver):
         fallback_suffix: bool = True,
     ):
         self.max_iterations = max_iterations
-        self.sk_epsilon = sk_epsilon if sk_epsilon is not None else 0.003
+        self.sk_epsilon = sk_epsilon if sk_epsilon is not None else _DEFAULT_SK_EPSILON
         self.fallback_suffix = fallback_suffix
 
-    def assign(self, semantic_ids: List[str], **kwargs) -> List[str]:
+    def assign(self, semantic_ids: List[str], **kwargs: Any) -> List[str]:
         """
         Resolve collisions using Sinkhorn re-encoding.
 
@@ -137,48 +140,41 @@ class SinkhornResolver(BaseResolver):
         all_ids = list(semantic_ids)
         all_ids_str = np.array([str(s) for s in all_ids])
 
-        # Save original sk_epsilon values and disable Sinkhorn on all but last layer
         original_epsilons = []
         for vq in model.rq.vq_layers:
             original_epsilons.append(vq.sk_epsilon)
 
-        # Disable Sinkhorn on all layers except last
-        for vq in model.rq.vq_layers[:-1]:
-            vq.sk_epsilon = 0.0
+        try:
+            for vq in model.rq.vq_layers[:-1]:
+                vq.sk_epsilon = 0.0
 
-        # Enable Sinkhorn on the last layer
-        last_vq = model.rq.vq_layers[-1]
-        if last_vq.sk_epsilon <= 0:
-            last_vq.sk_epsilon = self.sk_epsilon
+            last_vq = model.rq.vq_layers[-1]
+            if last_vq.sk_epsilon <= 0:
+                last_vq.sk_epsilon = self.sk_epsilon
 
-        model.eval()
+            model.eval()
 
-        for iteration in range(self.max_iterations):
-            # Find collision groups
-            collision_groups = self._find_collision_groups(all_ids_str)
+            for iteration in range(self.max_iterations):
+                collision_groups = self._find_collision_groups(all_ids_str)
 
-            if not collision_groups:
-                break  # No more collisions
+                if not collision_groups:
+                    break
 
-            # Re-encode each collision group with Sinkhorn
-            with torch.no_grad():
-                for group_indices in collision_groups:
-                    group_emb = embeddings[group_indices]
+                with torch.no_grad():
+                    for group_indices in collision_groups:
+                        group_emb = embeddings[group_indices]
 
-                    # Re-encode with Sinkhorn enabled
-                    new_indices = model.get_indices(group_emb, use_sk=True)
-                    new_indices_np = new_indices.cpu().numpy()
+                        new_indices = model.get_indices(group_emb, use_sk=True)
+                        new_indices_np = new_indices.cpu().numpy()
 
-                    # Update IDs
-                    for local_idx, global_idx in enumerate(group_indices):
-                        new_code = new_indices_np[local_idx]
-                        new_sid = sep.join(map(str, new_code))
-                        all_ids[global_idx] = new_sid
-                        all_ids_str[global_idx] = new_sid
-
-        # Restore original sk_epsilon values
-        for vq, eps in zip(model.rq.vq_layers, original_epsilons):
-            vq.sk_epsilon = eps
+                        for local_idx, global_idx in enumerate(group_indices):
+                            new_code = new_indices_np[local_idx]
+                            new_sid = sep.join(map(str, new_code))
+                            all_ids[global_idx] = new_sid
+                            all_ids_str[global_idx] = new_sid
+        finally:
+            for vq, eps in zip(model.rq.vq_layers, original_epsilons):
+                vq.sk_epsilon = eps
 
         # Fallback: if still collisions, use suffix resolution
         if self.fallback_suffix:

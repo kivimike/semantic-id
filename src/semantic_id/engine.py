@@ -1,7 +1,7 @@
 import json
 import os
 import shutil
-from typing import Callable, List, Literal, Optional
+from typing import Callable, Dict, List, Literal, Optional, Type
 
 import numpy as np
 
@@ -17,11 +17,10 @@ from semantic_id.uniqueness.stores import (
     SQLiteCollisionStore,
 )
 
-# Registry of encoder types for deserialization
-_ENCODER_REGISTRY = {}
+_ENCODER_REGISTRY: Dict[str, Type[BaseSemanticEncoder]] = {}
 
 
-def _ensure_registry():
+def _ensure_registry() -> None:
     """Lazily populate the encoder registry to avoid circular imports."""
     if not _ENCODER_REGISTRY:
         from semantic_id.algorithms.rq_kmeans import RQKMeans
@@ -41,8 +40,9 @@ class SemanticIdEngine:
         self,
         encoder: BaseSemanticEncoder,
         unique_resolver: Optional[BaseResolver] = None,
-    ):
+    ) -> None:
         self.encoder = encoder
+        self.unique_resolver: BaseResolver
         if unique_resolver is None:
             self.unique_resolver = UniqueIdResolver(store=InMemoryCollisionStore())
         else:
@@ -139,17 +139,16 @@ class SemanticIdEngine:
         resolver_path = os.path.join(path, "resolver")
         os.makedirs(resolver_path, exist_ok=True)
 
-        store = self.unique_resolver.store
+        store = getattr(self.unique_resolver, "store", None)
         store_type = "in_memory"
         store_config = {}
 
         if isinstance(store, SQLiteCollisionStore):
             store_type = "sqlite"
-            # Copy the SQLite DB file into the save directory
             dest_db = os.path.join(resolver_path, "collisions.db")
             if os.path.exists(store.db_path):
                 shutil.copy2(store.db_path, dest_db)
-            store_config["db_path"] = "collisions.db"  # relative path
+            store_config["db_path"] = "collisions.db"
 
         # Detect encoder type from metadata if possible
         encoder_type = type(self.encoder).__name__

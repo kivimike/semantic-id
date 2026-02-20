@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.nn as nn
@@ -12,26 +12,33 @@ from semantic_id.utils.clustering import (
 )
 
 
-def activation_layer(activation_name="relu", emb_dim=None):
+def activation_layer(
+    activation_name: Union[str, Type[nn.Module], None] = "relu",
+    emb_dim: Optional[int] = None,
+) -> Optional[nn.Module]:
     """
     Factory for activation functions.
     """
     if activation_name is None:
         return None
 
-    name = activation_name.lower() if isinstance(activation_name, str) else ""
-
-    if name == "sigmoid":
-        return nn.Sigmoid()
-    elif name == "tanh":
-        return nn.Tanh()
-    elif name == "relu":
-        return nn.ReLU()
-    elif name == "leakyrelu":
-        return nn.LeakyReLU()
-    elif name == "none":
-        return None
-    elif issubclass(activation_name, nn.Module):
+    if isinstance(activation_name, str):
+        name = activation_name.lower()
+        if name == "sigmoid":
+            return nn.Sigmoid()
+        elif name == "tanh":
+            return nn.Tanh()
+        elif name == "relu":
+            return nn.ReLU()
+        elif name == "leakyrelu":
+            return nn.LeakyReLU()
+        elif name == "none":
+            return None
+        else:
+            raise NotImplementedError(
+                f"activation function {activation_name} is not implemented"
+            )
+    elif isinstance(activation_name, type) and issubclass(activation_name, nn.Module):
         return activation_name()
     else:
         raise NotImplementedError(
@@ -58,7 +65,7 @@ class MLPLayers(nn.Module):
         self.activation = activation
         self.use_bn = bn
 
-        mlp_modules = []
+        mlp_modules: List[nn.Module] = []
         for idx, (input_size, output_size) in enumerate(
             zip(self.layers[:-1], self.layers[1:])
         ):
@@ -75,14 +82,14 @@ class MLPLayers(nn.Module):
         self.mlp_layers = nn.Sequential(*mlp_modules)
         self.apply(self.init_weights)
 
-    def init_weights(self, module):
+    def init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear):
             xavier_normal_(module.weight.data)
             if module.bias is not None:
                 module.bias.data.fill_(0.0)
 
-    def forward(self, input_feature):
-        return self.mlp_layers(input_feature)
+    def forward(self, input_feature: torch.Tensor) -> torch.Tensor:
+        return self.mlp_layers(input_feature)  # type: ignore[no-any-return]
 
 
 class VectorQuantizer(nn.Module):
@@ -94,14 +101,14 @@ class VectorQuantizer(nn.Module):
 
     def __init__(
         self,
-        n_e,
-        e_dim,
-        beta=0.25,
-        kmeans_init=False,
-        kmeans_iters=10,
-        sk_epsilon=0.003,
-        sk_iters=100,
-    ):
+        n_e: int,
+        e_dim: int,
+        beta: float = 0.25,
+        kmeans_init: bool = False,
+        kmeans_iters: int = 10,
+        sk_epsilon: float = 0.003,
+        sk_iters: int = 100,
+    ) -> None:
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
@@ -119,18 +126,18 @@ class VectorQuantizer(nn.Module):
             self.initted = False
             self.embedding.weight.data.zero_()
 
-    def get_codebook(self):
+    def get_codebook(self) -> torch.Tensor:
         return self.embedding.weight
 
-    def get_codebook_entry(self, indices, shape=None):
-        # get quantized latent vectors
-        z_q = self.embedding(indices)
+    def get_codebook_entry(
+        self, indices: torch.Tensor, shape: Optional[Any] = None
+    ) -> torch.Tensor:
+        z_q: torch.Tensor = self.embedding(indices)
         if shape is not None:
             z_q = z_q.view(shape)
-
         return z_q
 
-    def init_emb(self, data):
+    def init_emb(self, data: torch.Tensor) -> None:
         """
         Initialize embeddings using K-Means on the first batch.
         Uses shared clustering utilities.
@@ -144,8 +151,9 @@ class VectorQuantizer(nn.Module):
         self.embedding.weight.data.copy_(centers)
         self.initted = True
 
-    def forward(self, x, use_sk=True):
-        # Flatten input
+    def forward(
+        self, x: torch.Tensor, use_sk: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         latent = x.view(-1, self.e_dim)
 
         if not self.initted and self.training:
@@ -213,14 +221,14 @@ class ResidualVectorQuantizer(nn.Module):
 
     def __init__(
         self,
-        n_e_list,
-        e_dim,
-        sk_epsilons,
-        beta=0.25,
-        kmeans_init=False,
-        kmeans_iters=100,
-        sk_iters=100,
-    ):
+        n_e_list: List[int],
+        e_dim: int,
+        sk_epsilons: Optional[List[float]],
+        beta: float = 0.25,
+        kmeans_init: bool = False,
+        kmeans_iters: int = 100,
+        sk_iters: int = 100,
+    ) -> None:
         super().__init__()
         self.n_e_list = n_e_list
         self.e_dim = e_dim
@@ -250,30 +258,32 @@ class ResidualVectorQuantizer(nn.Module):
             ]
         )
 
-    def get_codebook(self):
+    def get_codebook(self) -> torch.Tensor:
         all_codebook = []
         for quantizer in self.vq_layers:
+            assert isinstance(quantizer, VectorQuantizer)
             codebook = quantizer.get_codebook()
             all_codebook.append(codebook)
         return torch.stack(all_codebook)
 
-    def forward(self, x, use_sk=True):
-        all_losses = []
-        all_indices = []
+    def forward(
+        self, x: torch.Tensor, use_sk: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        all_losses: List[torch.Tensor] = []
+        all_indices_list: List[torch.Tensor] = []
 
-        x_q = 0
+        x_q = torch.zeros_like(x)
         residual = x
         for quantizer in self.vq_layers:
+            assert isinstance(quantizer, VectorQuantizer)
             x_res, loss, indices = quantizer(residual, use_sk=use_sk)
             residual = residual - x_res
             x_q = x_q + x_res
 
             all_losses.append(loss)
-            all_indices.append(indices)
+            all_indices_list.append(indices)
 
-        # mean_losses = torch.stack(all_losses).mean() # Original
-        # Ensure we don't fail if empty, though VQ list shouldn't be empty
         mean_losses = torch.stack(all_losses).mean()
-        all_indices = torch.stack(all_indices, dim=-1)
+        all_indices = torch.stack(all_indices_list, dim=-1)
 
         return x_q, mean_losses, all_indices

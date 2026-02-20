@@ -2,6 +2,9 @@ from typing import Optional
 
 import torch
 
+_DEFAULT_SINKHORN_EPSILON = 0.1
+_DEFAULT_SINKHORN_ITERATIONS = 30
+
 
 def sinkhorn_algorithm(
     distances: torch.Tensor, epsilon: float, sinkhorn_iterations: int
@@ -87,7 +90,7 @@ def _initialize_centroids_kmeans_plus_plus(
         torch.manual_seed(seed)
 
     # 1. Choose first center randomly
-    first_center_idx = torch.randint(0, N, (1,), device=device).item()
+    first_center_idx = int(torch.randint(0, N, (1,), device=device).item())
 
     centers = torch.empty((K, D), device=device, dtype=X.dtype)
     centers[0] = X[first_center_idx]
@@ -111,11 +114,9 @@ def _initialize_centroids_kmeans_plus_plus(
         # torch.multinomial handles weighting
 
         if closest_dist_sq.sum() == 0:
-            # Fallback if all points are identical to centers
-            candidate_idx = torch.randint(0, N, (1,), device=device).item()
+            candidate_idx = int(torch.randint(0, N, (1,), device=device).item())
         else:
-            # Multinomial expects probabilities (or weights)
-            candidate_idx = torch.multinomial(closest_dist_sq, 1).item()
+            candidate_idx = int(torch.multinomial(closest_dist_sq, 1).item())
 
         centers[i] = X[candidate_idx]
 

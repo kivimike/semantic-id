@@ -4,7 +4,10 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from semantic_id.exceptions import NotFittedError
 from semantic_id.utils.clustering import (
+    _DEFAULT_SINKHORN_EPSILON,
+    _DEFAULT_SINKHORN_ITERATIONS,
     center_distance_for_constraint,
     kmeans_torch,
     sinkhorn_algorithm,
@@ -39,7 +42,20 @@ class RQKMeansTorch:
         verbose: bool,
         device: str,
         n_init: Optional[int] = None,
-    ):
+    ) -> None:
+        """
+        Args:
+            n_levels: Number of residual quantization levels.
+            n_clusters: Codebook size per level.
+            metric: Distance metric (``"l2"`` only).
+            implementation: ``"kmeans"`` or ``"constrained"``.
+            max_iter: Maximum K-Means iterations per level.
+            tol: Convergence tolerance.
+            random_state: Seed for reproducibility.
+            verbose: Show progress bars.
+            device: PyTorch device string (e.g. ``"cuda"``).
+            n_init: Number of K-Means initialisations.
+        """
         self.n_levels = n_levels
         self.n_clusters = n_clusters
         self.metric = metric
@@ -51,12 +67,19 @@ class RQKMeansTorch:
         self.device = device
         self.n_init = n_init
 
-        # We store codebooks as a List of torch Tensors on the target device
         self.codebooks_: List[torch.Tensor] = []
-        self.D_ = None
+        self.D_: Optional[int] = None
 
     def fit(self, X: Union[np.ndarray, torch.Tensor]) -> "RQKMeansTorch":
-        # Ensure X is a tensor on the correct device
+        """
+        Train the encoder on embeddings *X*.
+
+        Args:
+            X: Input embeddings of shape ``(N, D)``.
+
+        Returns:
+            self
+        """
         if isinstance(X, np.ndarray):
             X = torch.from_numpy(X).to(self.device, dtype=torch.float32)
         else:
@@ -92,7 +115,7 @@ class RQKMeansTorch:
                 # Attempt to use GPU-based Sinkhorn Constrained K-Means first
                 try:
                     centers, labels = self._constrained_kmeans_torch(residuals, K, seed)
-                except Exception as e:
+                except (RuntimeError, ValueError) as e:
                     if self.verbose:
                         print(
                             f"GPU Constrained K-Means failed ({e}), falling back to CPU..."
@@ -115,7 +138,7 @@ class RQKMeansTorch:
                     if self.n_init is not None:
                         current_n_init = self.n_init
                     else:
-                        current_n_init = 3  # Constrained default
+                        current_n_init = 3
 
                     kmeans = KMeansConstrained(
                         n_clusters=K,
@@ -154,8 +177,21 @@ class RQKMeansTorch:
     def encode(
         self, X: Union[np.ndarray, torch.Tensor], batch_size: Optional[int] = None
     ) -> np.ndarray:
+        """
+        Encode embeddings into discrete codes.
+
+        Args:
+            X: Input embeddings of shape ``(N, D)``.
+            batch_size: Optional batch size for large datasets.
+
+        Returns:
+            Integer codes of shape ``(N, L)`` with dtype ``int32``.
+
+        Raises:
+            RuntimeError: If the model has not been fitted yet.
+        """
         if not self.codebooks_:
-            raise RuntimeError("Model is not fitted yet.")
+            raise NotFittedError("Model is not fitted yet. Call fit() first.")
 
         if isinstance(X, np.ndarray):
             X = torch.from_numpy(X).to(self.device, dtype=torch.float32)
@@ -206,7 +242,9 @@ class RQKMeansTorch:
 
         return codes
 
-    def _kmeans_torch(self, X: torch.Tensor, K: int, seed: Optional[int]):
+    def _kmeans_torch(
+        self, X: torch.Tensor, K: int, seed: Optional[int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Simple K-Means implementation in PyTorch using shared utils.
         """
@@ -220,7 +258,9 @@ class RQKMeansTorch:
 
         return centers, labels
 
-    def _constrained_kmeans_torch(self, X: torch.Tensor, K: int, seed: Optional[int]):
+    def _constrained_kmeans_torch(
+        self, X: torch.Tensor, K: int, seed: Optional[int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Constrained K-Means using Sinkhorn-Knopp algorithm for balanced assignment.
         This runs entirely on GPU.
@@ -240,8 +280,11 @@ class RQKMeansTorch:
             dists_sq = dists**2
 
             d_centered = center_distance_for_constraint(dists_sq)
-            # Epsilon and iters are hyperparameters. 0.1 and 30 are reasonable starts.
-            Q = sinkhorn_algorithm(d_centered, epsilon=0.1, sinkhorn_iterations=30)
+            Q = sinkhorn_algorithm(
+                d_centered,
+                epsilon=_DEFAULT_SINKHORN_EPSILON,
+                sinkhorn_iterations=_DEFAULT_SINKHORN_ITERATIONS,
+            )
 
             # Hard assignment from Q
             labels = torch.argmax(Q, dim=1)

@@ -4,7 +4,28 @@ from typing import Callable, Dict, List, Literal, Optional, Union
 
 import numpy as np
 
+from semantic_id.exceptions import NotFittedError, ShapeMismatchError
+
 ArrayLike = Union[np.ndarray, List[List[float]]]
+
+
+def _validate_embeddings(
+    X: ArrayLike, expected_dim: Optional[int] = None
+) -> np.ndarray:
+    """Convert *X* to float32 ndarray and validate shape/values."""
+    arr = np.asarray(X, dtype=np.float32)
+    if arr.ndim != 2:
+        raise ShapeMismatchError(
+            f"Expected 2-D input (N, D), got {arr.ndim}-D array with shape {arr.shape}"
+        )
+    if arr.shape[0] == 0:
+        raise ShapeMismatchError("Input must contain at least one sample (N > 0)")
+    if expected_dim is not None and arr.shape[1] != expected_dim:
+        raise ShapeMismatchError(f"Expected D={expected_dim}, got D={arr.shape[1]}")
+    if np.isnan(arr).any() or np.isinf(arr).any():
+        raise ValueError("Input contains NaN or Inf values")
+    return arr
+
 
 # Letters used for token-format IDs: a, b, c, d, e, ...
 _TOKEN_LETTERS = string.ascii_lowercase

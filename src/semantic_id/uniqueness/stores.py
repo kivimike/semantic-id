@@ -41,9 +41,11 @@ class CollisionStore(ABC):
 
 
 class InMemoryCollisionStore(CollisionStore):
-    def __init__(self):
+    """Thread-safe in-memory collision counter backed by a dictionary."""
+
+    def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._counts: Dict[str, int] = {}  # Key -> number of times seen so far
+        self._counts: Dict[str, int] = {}
 
     def next_suffix(self, key: str) -> int:
         with self._lock:
@@ -53,19 +55,22 @@ class InMemoryCollisionStore(CollisionStore):
 
 
 class SQLiteCollisionStore(CollisionStore):
-    def __init__(self, db_path: str = "collisions.db"):
+    """
+    Persistent collision counter backed by SQLite.
+
+    Each call to :meth:`next_suffix` opens a short-lived connection and
+    uses ``BEGIN IMMEDIATE`` for safe concurrent access.
+
+    Args:
+        db_path: Path to the SQLite database file.
+    """
+
+    def __init__(self, db_path: str = "collisions.db") -> None:
         self.db_path = db_path
         self._init_db()
-        self._lock = (
-            threading.Lock()
-        )  # SQLite is thread-safe mostly, but let's be safe for connection sharing or just create connection per thread.
-        # Actually standard sqlite3 connections are not thread-safe.
-        # Ideally we open a new connection or use a pool.
-        # For MVP simplicity, we'll open a connection for each operation or use a global lock around a single connection (low throughput).
-        # Let's use a lock and a single connection with check_same_thread=False (careful usage) OR just open/close per call.
-        # Open/close is safer for MVP.
+        self._lock = threading.Lock()
 
-    def _init_db(self):
+    def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS collisions (
@@ -107,6 +112,6 @@ class SQLiteCollisionStore(CollisionStore):
                     )
                 conn.commit()
                 return current
-            except Exception:
+            except sqlite3.Error:
                 conn.rollback()
                 raise

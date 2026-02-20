@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -73,7 +73,9 @@ class RQVAEModule(nn.Module):
             layers=self.decode_layer_dims, dropout=self.dropout_prob, bn=self.bn
         )
 
-    def forward(self, x, use_sk=True):
+    def forward(
+        self, x: torch.Tensor, use_sk: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through the VAE.
 
@@ -93,15 +95,18 @@ class RQVAEModule(nn.Module):
         return out, rq_loss, indices
 
     @torch.no_grad()
-    def get_indices(self, xs, use_sk=False):
+    def get_indices(self, xs: torch.Tensor, use_sk: bool = False) -> torch.Tensor:
         """
         Encode inputs to discrete indices (inference mode).
         """
         x_e = self.encoder(xs)
         _, _, indices = self.rq(x_e, use_sk=use_sk)
-        return indices
+        result: torch.Tensor = indices
+        return result
 
-    def compute_loss(self, out, quant_loss, xs=None):
+    def compute_loss(
+        self, out: torch.Tensor, quant_loss: torch.Tensor, xs: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Compute total loss (Reconstruction + Quantization).
         """

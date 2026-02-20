@@ -39,7 +39,7 @@ def hierarchical_distance(codes_a: np.ndarray, codes_b: np.ndarray) -> np.ndarra
     match = codes_a == codes_b
     cum_match = np.cumprod(match, axis=-1)
     prefix_len = np.sum(cum_match, axis=-1)
-    return L - prefix_len
+    return np.asarray(L - prefix_len)
 
 
 def _hierarchical_metric(a: np.ndarray, b: np.ndarray) -> float:

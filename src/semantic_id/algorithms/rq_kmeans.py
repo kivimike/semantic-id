@@ -9,7 +9,11 @@ from sklearn.metrics.pairwise import euclidean_distances
 from tqdm import tqdm
 
 from semantic_id.algorithms.rq_kmeans_torch import RQKMeansTorch
-from semantic_id.core import ArrayLike, BaseSemanticEncoder
+from semantic_id.core import ArrayLike, BaseSemanticEncoder, _validate_embeddings
+from semantic_id.exceptions import NotFittedError
+
+_DEFAULT_N_INIT_STANDARD = 10
+_DEFAULT_N_INIT_CONSTRAINED = 3
 
 try:
     from k_means_constrained import KMeansConstrained
@@ -38,6 +42,23 @@ class RQKMeans(BaseSemanticEncoder):
         verbose: bool = False,
         n_init: Optional[int] = None,
     ):
+        """
+        Args:
+            n_levels: Number of residual quantization levels (depth of the
+                code tree).
+            n_clusters: Codebook size per level.  An int applies to all
+                levels; a list allows a different size at each level.
+            metric: Distance metric (``"l2"`` supported; ``"cosine"``
+                raises ``NotImplementedError``).
+            implementation: ``"kmeans"`` for standard K-Means or
+                ``"constrained"`` for balanced (size-constrained) K-Means.
+            max_iter: Maximum K-Means iterations per level.
+            tol: Convergence tolerance.
+            random_state: Seed for reproducibility.
+            verbose: If ``True``, display progress bars and per-level logs.
+            n_init: Number of K-Means initialisations.  Defaults to 10 for
+                standard and 3 for constrained.
+        """
         self.n_levels = n_levels
 
         if isinstance(n_clusters, int):
@@ -57,10 +78,8 @@ class RQKMeans(BaseSemanticEncoder):
         self.verbose = verbose
         self.n_init = n_init
 
-        self.codebooks_: List[np.ndarray] = (
-            []
-        )  # List of (K_l, D) arrays (Always stored as Numpy on CPU for master state)
-        self.D_ = None
+        self.codebooks_: List[np.ndarray] = []
+        self.D_: Optional[int] = None
 
         if self.metric == "cosine":
             raise NotImplementedError(
@@ -74,13 +93,25 @@ class RQKMeans(BaseSemanticEncoder):
             )
 
     def fit(self, X: ArrayLike, *, device: str = "cpu") -> "RQKMeans":
+        """
+        Train the encoder on embeddings *X*.
+
+        Args:
+            X: Input embeddings of shape ``(N, D)``.
+            device: ``"cpu"`` for the NumPy/sklearn backend, or a CUDA/MPS
+                device string (e.g. ``"cuda"``) to use the PyTorch backend.
+
+        Returns:
+            self
+        """
+        _validate_embeddings(X)
         if device == "cpu":
             self._fit_numpy(X)
         else:
             self._fit_torch(X, device)
         return self
 
-    def _fit_numpy(self, X: ArrayLike):
+    def _fit_numpy(self, X: ArrayLike) -> None:
         X = np.asarray(X, dtype=np.float32)
         N, D = X.shape
         self.D_ = D
@@ -113,11 +144,10 @@ class RQKMeans(BaseSemanticEncoder):
             # Determine n_init
             if self.n_init is not None:
                 current_n_init = self.n_init
+            elif self.implementation == "constrained":
+                current_n_init = _DEFAULT_N_INIT_CONSTRAINED
             else:
-                if self.implementation == "constrained":
-                    current_n_init = 3  # Constrained default
-                else:
-                    current_n_init = 10  # Standard default
+                current_n_init = _DEFAULT_N_INIT_STANDARD
 
             if self.implementation == "constrained":
                 # Calculate min and max cluster size for balanced clustering
@@ -153,7 +183,7 @@ class RQKMeans(BaseSemanticEncoder):
             # R_{l+1} = R_l - C_l[codes_l]
             residuals = residuals - centers[labels]
 
-    def _fit_torch(self, X: ArrayLike, device: str):
+    def _fit_torch(self, X: ArrayLike, device: str) -> None:
         # Delegate to RQKMeansTorch
         torch_model = RQKMeansTorch(
             n_levels=self.n_levels,
@@ -167,17 +197,32 @@ class RQKMeans(BaseSemanticEncoder):
             device=device,
             n_init=self.n_init,
         )
-        torch_model.fit(X)
+        torch_model.fit(np.asarray(X))
 
-        # Sync codebooks back to Numpy/CPU
         self.D_ = torch_model.D_
         self.codebooks_ = [cb.cpu().numpy() for cb in torch_model.codebooks_]
 
     def encode(
         self, X: ArrayLike, *, device: str = "cpu", batch_size: Optional[int] = None
     ) -> np.ndarray:
+        """
+        Encode embeddings into discrete codes.
+
+        Args:
+            X: Input embeddings of shape ``(N, D)``.
+            device: Computation device.
+            batch_size: Optional batch size for processing large datasets.
+
+        Returns:
+            Integer codes of shape ``(N, L)`` with dtype ``int32``.
+
+        Raises:
+            RuntimeError: If the model has not been fitted yet.
+        """
         if not self.codebooks_:
-            raise RuntimeError("Model is not fitted yet.")
+            raise NotFittedError("Model is not fitted yet. Call fit() first.")
+
+        _validate_embeddings(X, expected_dim=self.D_)
 
         if device == "cpu":
             return self._encode_numpy(X, batch_size)
@@ -243,18 +288,29 @@ class RQKMeans(BaseSemanticEncoder):
             torch.from_numpy(cb).to(device) for cb in self.codebooks_
         ]
 
-        return torch_model.encode(X, batch_size=batch_size)
+        return torch_model.encode(np.asarray(X), batch_size=batch_size)
 
     # semantic_id() inherited from BaseSemanticEncoder (supports plain and token formats)
 
     def decode(self, codes: np.ndarray) -> np.ndarray:
+        """
+        Approximate the original vectors from codes by summing codebook
+        look-ups across levels.
+
+        Args:
+            codes: Integer codes of shape ``(N, L)``.
+
+        Returns:
+            Reconstructed vectors of shape ``(N, D)``.
+
+        Raises:
+            RuntimeError: If the model has not been fitted yet.
+        """
         if not self.codebooks_:
-            raise RuntimeError("Model is not fitted yet.")
+            raise NotFittedError("Model is not fitted yet. Call fit() first.")
 
         N, L = codes.shape
-        # Ensure codes are within bounds
-        # assert np.all(codes < self.n_clusters)
-
+        assert self.D_ is not None
         vectors_approx = np.zeros((N, self.D_), dtype=np.float32)
 
         for lvl in range(L):
@@ -265,6 +321,12 @@ class RQKMeans(BaseSemanticEncoder):
         return vectors_approx
 
     def save(self, path: str) -> None:
+        """
+        Save model metadata and codebooks to *path*.
+
+        Args:
+            path: Directory to save into (created if it does not exist).
+        """
         os.makedirs(path, exist_ok=True)
 
         metadata = {
@@ -283,12 +345,22 @@ class RQKMeans(BaseSemanticEncoder):
         with open(os.path.join(path, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
 
-        # Save codebooks as separate arrays
+        codebooks_path = os.path.join(path, "codebooks.npz")
         codebook_dict = {f"codebook_{i}": cb for i, cb in enumerate(self.codebooks_)}
-        np.savez_compressed(os.path.join(path, "codebooks.npz"), **codebook_dict)
+        np.savez_compressed(codebooks_path, **codebook_dict)  # type: ignore[arg-type]
 
     @classmethod
     def load(cls, path: str, *, device: str = "cpu") -> "RQKMeans":
+        """
+        Load a saved RQKMeans model from disk.
+
+        Args:
+            path: Directory containing the saved artifacts.
+            device: Ignored (codebooks are always NumPy arrays on CPU).
+
+        Returns:
+            Loaded ``RQKMeans`` instance.
+        """
         with open(os.path.join(path, "metadata.json"), "r") as f:
             metadata = json.load(f)
 
