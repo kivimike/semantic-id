@@ -13,15 +13,12 @@ except ImportError:
 
 from semantic_id.core import BaseSemanticEncoder
 
-
 # ---------------------------------------------------------------------------
 # Distance functions
 # ---------------------------------------------------------------------------
 
 
-def hierarchical_distance(
-    codes_a: np.ndarray, codes_b: np.ndarray
-) -> np.ndarray:
+def hierarchical_distance(codes_a: np.ndarray, codes_b: np.ndarray) -> np.ndarray:
     """
     Vectorized hierarchical (prefix-based) distance between code vectors.
 
@@ -86,9 +83,7 @@ def recall_at_k(
     """
     N = X.shape[0]
     if k >= N:
-        raise ValueError(
-            f"k={k} must be less than N={N} (need at least k+1 samples)"
-        )
+        raise ValueError(f"k={k} must be less than N={N} (need at least k+1 samples)")
     n_queries = min(N, sample_size)
 
     rng = np.random.RandomState(seed)
@@ -247,9 +242,7 @@ def ndcg_at_k(
     """
     N = X.shape[0]
     if k >= N:
-        raise ValueError(
-            f"k={k} must be less than N={N} (need at least k+1 samples)"
-        )
+        raise ValueError(f"k={k} must be less than N={N} (need at least k+1 samples)")
     n_queries = min(N, sample_size)
 
     rng = np.random.RandomState(seed)
@@ -373,9 +366,7 @@ def collision_rate_per_level(codes: np.ndarray) -> List[float]:
     rates = []
     for depth in range(1, L + 1):
         prefix = np.ascontiguousarray(codes[:, :depth])
-        prefix_view = prefix.view(
-            np.dtype((np.void, prefix.dtype.itemsize * depth))
-        )
+        prefix_view = prefix.view(np.dtype((np.void, prefix.dtype.itemsize * depth)))
         n_unique = len(np.unique(prefix_view))
         rates.append(1.0 - (n_unique / N))
     return rates
