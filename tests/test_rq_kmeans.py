@@ -4,6 +4,38 @@ import pytest
 from semantic_id.algorithms.rq_kmeans import RQKMeans
 
 
+def test_encode_before_fit_raises():
+    model = RQKMeans(n_levels=2, n_clusters=5)
+    X = np.random.randn(10, 8)
+    with pytest.raises(RuntimeError, match="not fitted"):
+        model.encode(X)
+
+
+def test_decode_before_fit_raises():
+    model = RQKMeans(n_levels=2, n_clusters=5)
+    codes = np.zeros((5, 2), dtype=np.int32)
+    with pytest.raises(RuntimeError, match="not fitted"):
+        model.decode(codes)
+
+
+def test_mismatched_n_clusters_length():
+    with pytest.raises(ValueError, match="must match n_levels"):
+        RQKMeans(n_levels=3, n_clusters=[5, 10])
+
+
+def test_cosine_metric_raises():
+    with pytest.raises(NotImplementedError, match="Cosine"):
+        RQKMeans(n_levels=2, n_clusters=5, metric="cosine")
+
+
+def test_single_sample():
+    X = np.random.randn(1, 8).astype(np.float32)
+    model = RQKMeans(n_levels=2, n_clusters=1, random_state=42)
+    model.fit(X)
+    codes = model.encode(X)
+    assert codes.shape == (1, 2)
+
+
 def test_rq_kmeans_shapes():
     N, D = 100, 16
     X = np.random.randn(N, D)
@@ -75,6 +107,24 @@ def test_constrained_kmeans():
     # We allow a small margin (e.g., +/- 3).
     assert np.all(counts >= 5)
     assert np.all(counts <= 15)
+
+
+def test_decode_round_trip():
+    N, D = 50, 8
+    X = np.random.randn(N, D).astype(np.float32)
+
+    model = RQKMeans(n_levels=3, n_clusters=10, random_state=42)
+    model.fit(X)
+
+    codes = model.encode(X)
+    X_hat = model.decode(codes)
+
+    assert X_hat.shape == X.shape
+    assert X_hat.dtype == np.float32
+    # Reconstruction should be closer to X than random noise
+    mse = np.mean((X - X_hat) ** 2)
+    random_mse = np.mean(X**2)
+    assert mse < random_mse
 
 
 def test_variable_clusters():
