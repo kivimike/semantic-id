@@ -40,3 +40,5 @@ Thumbs.db
 # Local reference implementations
 reference/
 ROADMAP.md
+
+*.txt

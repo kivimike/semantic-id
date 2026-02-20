@@ -2,19 +2,20 @@ import numpy as np
 import pytest
 
 from semantic_id.algorithms.rq_kmeans import RQKMeans
+from semantic_id.exceptions import NotFittedError
 
 
 def test_encode_before_fit_raises():
     model = RQKMeans(n_levels=2, n_clusters=5)
-    X = np.random.randn(10, 8)
-    with pytest.raises(RuntimeError, match="not fitted"):
+    X = np.random.randn(10, 8).astype(np.float32)
+    with pytest.raises(NotFittedError, match="not fitted"):
         model.encode(X)
 
 
 def test_decode_before_fit_raises():
     model = RQKMeans(n_levels=2, n_clusters=5)
     codes = np.zeros((5, 2), dtype=np.int32)
-    with pytest.raises(RuntimeError, match="not fitted"):
+    with pytest.raises(NotFittedError, match="not fitted"):
         model.decode(codes)
 
 

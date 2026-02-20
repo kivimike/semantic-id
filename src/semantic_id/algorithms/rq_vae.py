@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from semantic_id.algorithms.rq_kmeans_plus import apply_rqkmeans_plus_strategy
 from semantic_id.algorithms.rq_vae_module import RQVAEModule
-from semantic_id.core import ArrayLike, BaseSemanticEncoder
+from semantic_id.core import ArrayLike, BaseSemanticEncoder, _validate_embeddings
 
 
 class RQVAE(BaseSemanticEncoder):
@@ -36,7 +36,6 @@ class RQVAE(BaseSemanticEncoder):
         kmeans_iters: int = 100,
         sk_epsilons: Optional[List[float]] = None,
         sk_iters: int = 100,
-        # Training params
         lr: float = 1e-4,
         weight_decay: float = 0.0,
         batch_size: int = 2048,
@@ -50,6 +49,38 @@ class RQVAE(BaseSemanticEncoder):
         device: str = "cpu",
         verbose: Union[bool, int] = False,
     ):
+        """
+        Args:
+            in_dim: Dimensionality of input embeddings.
+            num_emb_list: Codebook sizes per level (default ``[256]*4``).
+            e_dim: Latent embedding dimension inside the quantizer.
+            layers: Hidden-layer sizes for the encoder/decoder MLP.
+            dropout_prob: Dropout probability in the MLP.
+            bn: Whether to use batch normalisation.
+            loss_type: Reconstruction loss — ``"mse"`` or ``"l1"``.
+            quant_loss_weight: Weight of quantization loss relative to
+                reconstruction loss.
+            beta: Commitment-loss coefficient.
+            kmeans_init: Initialise codebook embeddings with K-Means on the
+                first batch.
+            kmeans_iters: K-Means iterations for codebook init.
+            sk_epsilons: Per-level Sinkhorn epsilon (balanced assignment).
+                ``None`` disables Sinkhorn.
+            sk_iters: Sinkhorn iterations.
+            lr: Learning rate.
+            weight_decay: AdamW weight decay.
+            batch_size: Training batch size.
+            epochs: Number of training epochs.
+            lr_scheduler: Optional LR schedule — ``"cosine"``, ``"step"``,
+                or ``"constant_with_warmup"``.
+            warmup_epochs: Linear warmup epochs (used by cosine and
+                constant_with_warmup schedulers).
+            lr_step_size: Epoch interval for step scheduler.
+            lr_gamma: Multiplicative factor for step scheduler.
+            device: Default device for training and inference.
+            verbose: ``True`` for progress bars; an ``int > 0`` sets the
+                logging interval in epochs.
+        """
         self.in_dim = in_dim
         self.num_emb_list = (
             num_emb_list if num_emb_list is not None else [256, 256, 256, 256]
@@ -97,7 +128,9 @@ class RQVAE(BaseSemanticEncoder):
         # Training history (populated during fit)
         self.history_: Dict[str, List[float]] = {}
 
-    def _build_scheduler(self, optimizer: torch.optim.Optimizer, steps_per_epoch: int):
+    def _build_scheduler(
+        self, optimizer: torch.optim.Optimizer, steps_per_epoch: int
+    ) -> Optional[torch.optim.lr_scheduler.LRScheduler]:
         """Build a learning rate scheduler based on configuration."""
         if self.lr_scheduler is None:
             return None
@@ -109,15 +142,15 @@ class RQVAE(BaseSemanticEncoder):
             # Cosine annealing with optional warmup
             if warmup_steps > 0:
 
-                def lr_lambda(step):
+                def lr_lambda_cosine(step: int) -> float:
                     if step < warmup_steps:
                         return float(step) / float(max(1, warmup_steps))
                     progress = float(step - warmup_steps) / float(
                         max(1, total_steps - warmup_steps)
                     )
-                    return 0.5 * (1.0 + np.cos(np.pi * progress))
+                    return float(0.5 * (1.0 + np.cos(np.pi * progress)))
 
-                return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+                return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_cosine)
             else:
                 return torch.optim.lr_scheduler.CosineAnnealingLR(
                     optimizer, T_max=total_steps
@@ -132,12 +165,12 @@ class RQVAE(BaseSemanticEncoder):
         elif self.lr_scheduler == "constant_with_warmup":
             if warmup_steps > 0:
 
-                def lr_lambda(step):
+                def lr_lambda_warmup(step: int) -> float:
                     if step < warmup_steps:
                         return float(step) / float(max(1, warmup_steps))
                     return 1.0
 
-                return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+                return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda_warmup)
             return None
 
         return None
@@ -145,19 +178,18 @@ class RQVAE(BaseSemanticEncoder):
     def _compute_collision_rate(self, codes: torch.Tensor) -> float:
         """Compute collision rate for a batch of codes."""
         N = codes.shape[0]
-        # Convert to numpy for unique check
         codes_np = codes.cpu().numpy().astype(np.int32)
         codes_view = np.ascontiguousarray(codes_np).view(
             np.dtype((np.void, codes_np.dtype.itemsize * codes_np.shape[1]))
         )
         n_unique = len(np.unique(codes_view))
-        return 1.0 - (n_unique / N)
+        return float(1.0 - (n_unique / N))
 
     def fit(
         self,
         X: ArrayLike,
         *,
-        device: str = None,
+        device: Optional[str] = None,
         pretrained_codebook_path: Optional[str] = None,
     ) -> "RQVAE":
         """
@@ -170,7 +202,8 @@ class RQVAE(BaseSemanticEncoder):
         """
         target_device = device if device is not None else self.device
 
-        # Convert data
+        _validate_embeddings(X, expected_dim=self.in_dim)
+
         if isinstance(X, np.ndarray):
             X_tensor = torch.from_numpy(X).float()
         else:
@@ -350,10 +383,27 @@ class RQVAE(BaseSemanticEncoder):
         return self
 
     def encode(
-        self, X: ArrayLike, *, device: str = None, batch_size: Optional[int] = None
+        self,
+        X: ArrayLike,
+        *,
+        device: Optional[str] = None,
+        batch_size: Optional[int] = None,
     ) -> np.ndarray:
+        """
+        Encode embeddings into discrete codes.
+
+        Args:
+            X: Input embeddings of shape ``(N, D)``.
+            device: Override the default device.
+            batch_size: Override the default batch size.
+
+        Returns:
+            Integer codes of shape ``(N, L)`` with dtype ``int32``.
+        """
         target_device = device if device is not None else self.device
         bs = batch_size if batch_size is not None else self.batch_size
+
+        _validate_embeddings(X, expected_dim=self.in_dim)
 
         if isinstance(X, np.ndarray):
             X_tensor = torch.from_numpy(X).float()
@@ -383,11 +433,18 @@ class RQVAE(BaseSemanticEncoder):
     # semantic_id() inherited from BaseSemanticEncoder (supports plain and token formats)
 
     def decode(self, codes: np.ndarray) -> np.ndarray:
-        # RQ-VAE decoding from indices involves:
-        # 1. Lookup embeddings for indices
-        # 2. Sum them (RQ)
-        # 3. Pass through Decoder MLP
+        """
+        Reconstruct approximate vectors from codes.
 
+        Looks up codebook embeddings, sums the residual contributions, and
+        passes the result through the decoder MLP.
+
+        Args:
+            codes: Integer codes of shape ``(N, L)``.
+
+        Returns:
+            Reconstructed vectors of shape ``(N, D)``.
+        """
         self.module.eval()
         # Ensure module is on same device as we expect or CPU
         # For simple decoding, let's assume CPU or current device
@@ -396,24 +453,29 @@ class RQVAE(BaseSemanticEncoder):
         codes_tensor = torch.from_numpy(codes).to(device)
 
         with torch.no_grad():
-            # 1 & 2: Reconstruct quantized vector (x_q)
-            # We need to access the RQ layer
-            x_q = 0
-            # Assuming codes shape matches layers
+            from semantic_id.algorithms.rq_vae_modules import VectorQuantizer
+
+            x_q: torch.Tensor = torch.zeros(codes.shape[0], self.e_dim, device=device)
             for i, layer in enumerate(self.module.rq.vq_layers):
+                assert isinstance(layer, VectorQuantizer)
                 indices = codes_tensor[:, i]
                 z_q = layer.get_codebook_entry(indices)
                 x_q = x_q + z_q
 
-            # 3. Decoder
             out = self.module.decoder(x_q)
 
-        return out.cpu().numpy()
+        result: np.ndarray = out.cpu().numpy()
+        return result
 
     def save(self, path: str) -> None:
+        """
+        Save model metadata and weights to *path*.
+
+        Args:
+            path: Directory to save into (created if it does not exist).
+        """
         os.makedirs(path, exist_ok=True)
 
-        # Save Metadata
         metadata = {
             "in_dim": self.in_dim,
             "num_emb_list": self.num_emb_list,
@@ -439,6 +501,16 @@ class RQVAE(BaseSemanticEncoder):
 
     @classmethod
     def load(cls, path: str, *, device: str = "cpu") -> "RQVAE":
+        """
+        Load a saved RQVAE model from disk.
+
+        Args:
+            path: Directory containing the saved artifacts.
+            device: Device to load the model onto.
+
+        Returns:
+            Loaded ``RQVAE`` instance.
+        """
         with open(os.path.join(path, "metadata.json"), "r") as f:
             metadata = json.load(f)
 

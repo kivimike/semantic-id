@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -11,8 +11,9 @@ def get_last_linear_layer(module: nn.Module) -> Optional[nn.Linear]:
     """
     Recursively find the last Linear layer in a module.
     """
-    if hasattr(module, "mlp_layers"):
-        modules = list(module.mlp_layers.modules())
+    seq = getattr(module, "mlp_layers", None)
+    if seq is not None and isinstance(seq, nn.Module):
+        modules = list(seq.modules())
     else:
         modules = list(module.modules())
 
@@ -28,17 +29,16 @@ class ResidualEncoderWrapper(nn.Module):
     Used in RQ-KMeans+ to warm-start from RQ-KMeans (where encoder is effectively identity).
     """
 
-    def __init__(self, original_encoder: nn.Module):
+    def __init__(self, original_encoder: nn.Module) -> None:
         super().__init__()
         self.mlp = original_encoder
 
-    def forward(self, x):
-        return x + self.mlp(x)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        result: torch.Tensor = x + self.mlp(x)
+        return result
 
 
-def apply_rqkmeans_plus_strategy(
-    model: nn.Module, codebook_path: str, device: str
-) -> nn.Module:
+def apply_rqkmeans_plus_strategy(model: Any, codebook_path: str, device: str) -> Any:
     """
     Applies the RQ-KMeans+ strategy to an RQ-VAE model.
 
